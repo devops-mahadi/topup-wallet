@@ -1,0 +1,44 @@
+# TopUpWallet infra — SQL Server, RabbitMQ, Redis, MongoDB.
+# arm64 (Apple Silicon): Azure SQL Edge is the ARM-native SQL Server.
+services:
+
+  sqlserver:
+    # Azure SQL Edge = ARM-native, speaks the SQL Server protocol (T-SQL, port 1433).
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: dc-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "TopUpWallet!2026"   # dev only — real secrets go in a vault
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+
+  rabbitmq:
+    # management image = broker + web UI on 15672 (guest/guest)
+    image: rabbitmq:3-management
+    container_name: dc-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP (app connects here)
+      - "15672:15672"   # management UI (browser)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  redis:
+    image: redis:7-alpine
+    container_name: dc-redis
+    ports:
+      - "6379:6379"
+
+  mongo:
+    image: mongo:7
+    container_name: dc-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+
+volumes:
+  sqldata:
+  mongodata:
