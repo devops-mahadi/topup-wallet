@@ -9,6 +9,7 @@ public class WalletDbContext : DbContext
 
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<WalletTransaction> Transactions => Set<WalletTransaction>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -32,6 +33,13 @@ public class WalletDbContext : DbContext
             // Index for fast lookup of an account's ledger + duplicate-key checks.
             e.HasIndex(t => t.AccountId);
             e.HasIndex(t => t.IdempotencyKey);
+        });
+
+        b.Entity<IdempotencyRecord>(e =>
+        {
+            e.HasKey(i => i.Key);                       // key is the PK → DB enforces uniqueness
+            e.Property(i => i.Key).HasMaxLength(100);
+            e.Property(i => i.ResultingBalance).HasColumnType("decimal(19,4)");
         });
     }
 }
