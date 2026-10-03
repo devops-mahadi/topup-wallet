@@ -19,8 +19,8 @@
 GET {{topup}}/health
 
 ###
+# Get a token first (any non-empty username/password).
 # @name login
-### Get a token first (any non-empty username/password).
 POST {{auth}}/auth/login
 Content-Type: {{contentType}}
 
@@ -30,8 +30,8 @@ Content-Type: {{contentType}}
 @token = {{login.response.body.$.accessToken}}
 
 ###
+# Create + fund a wallet account (on Wallet.Api) for this user.
 # @name createAccount
-### Create + fund a wallet account (on Wallet.Api) for this user.
 POST {{wallet}}/accounts
 Authorization: Bearer {{token}}
 Content-Type: {{contentType}}

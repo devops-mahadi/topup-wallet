@@ -15,8 +15,8 @@
 GET {{host}}/health
 
 ###
+# Get a token first. Any non-empty username/password works (demo).
 # @name login
-### Get a token first. Any non-empty username/password works (demo).
 POST {{auth}}/auth/login
 Content-Type: {{contentType}}
 
@@ -35,8 +35,8 @@ Content-Type: {{contentType}}
 { "ownerName": "No Auth", "currency": "USD", "opening": 10 }
 
 ###
+# Create an account (owned by the logged-in user). Token required.
 # @name createAccount
-### Create an account (owned by the logged-in user). Token required.
 POST {{host}}/accounts
 Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
@@ -106,9 +106,9 @@ Authorization: Bearer {{token}}
 ###   tok_3ds     -> RequiresAction (3-D Secure) + clientSecret
 
 ###
+# Create a $100 deposit. Response: depositId + status. Deposit is PENDING —
+# balance is NOT credited yet.
 # @name createDeposit
-### Create a $100 deposit. Response: depositId + status. Deposit is PENDING —
-### balance is NOT credited yet.
 POST {{host}}/accounts/{{accountId}}/deposits
 Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
@@ -123,9 +123,9 @@ GET {{host}}/accounts/{{accountId}}
 Authorization: Bearer {{token}}
 
 ###
+# DEMO helper: returns a correctly-SIGNED webhook body + signature for this
+# deposit, so you can fire the webhook below without a real PSP calling back.
 # @name webhookPayload
-### DEMO helper: returns a correctly-SIGNED webhook body + signature for this
-### deposit, so you can fire the webhook below without a real PSP calling back.
 POST {{host}}/accounts/{{accountId}}/deposits/{{depositId}}/webhook-payload
 Authorization: Bearer {{token}}
 

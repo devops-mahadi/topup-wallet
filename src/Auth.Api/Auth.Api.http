@@ -13,8 +13,8 @@
 GET {{auth}}/health
 
 ###
+# Log in. Returns { accessToken, refreshToken, tokenType, expiresInSeconds }.
 # @name login
-### Log in. Returns { accessToken, refreshToken, tokenType, expiresInSeconds }.
 POST {{auth}}/auth/login
 Content-Type: {{contentType}}
 
