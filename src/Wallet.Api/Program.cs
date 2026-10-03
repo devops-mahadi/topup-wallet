@@ -1,8 +1,10 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
 using Wallet.Api.Audit;
+using Wallet.Api.Consumers;
 using Wallet.Api.Data;
 using Wallet.Api.Domain;
 using Wallet.Api.Services;
@@ -23,8 +25,34 @@ builder.Services.AddDbContext<WalletDbContext>(opt =>
 // Mongo audit log — Singleton (MongoClient is thread-safe + pools connections).
 builder.Services.AddSingleton<AuditLog>();
 
-// Scoped: one WalletService (and its DbContext) per HTTP request.
+// Scoped: one WalletService (and its DbContext) per HTTP request / message.
 builder.Services.AddScoped<WalletService>();
+
+// MassTransit over RabbitMQ. Wallet is a COMMAND HANDLER: it consumes
+// DebitWallet / RefundWallet and publishes result events the saga awaits.
+builder.Services.AddMassTransit(x =>
+{
+    x.AddConsumer<DebitWalletConsumer>();
+    x.AddConsumer<RefundWalletConsumer>();
+
+    x.UsingRabbitMq((ctx, cfg) =>
+    {
+        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+
+        // Bind the consumers to the exact queue names the saga sends to.
+        cfg.ReceiveEndpoint("wallet-debit", e =>
+        {
+            e.ConfigureConsumer<DebitWalletConsumer>(ctx);
+            // Retry transient faults (deadlocks, broker blips) before dead-lettering.
+            e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromMilliseconds(500)));
+        });
+        cfg.ReceiveEndpoint("wallet-refund", e =>
+        {
+            e.ConfigureConsumer<RefundWalletConsumer>(ctx);
+            e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromMilliseconds(500)));
+        });
+    });
+});
 
 var app = builder.Build();
 
