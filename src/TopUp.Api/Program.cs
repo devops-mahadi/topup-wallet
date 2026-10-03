@@ -41,7 +41,8 @@ builder.Services.AddMassTransit(x =>
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
-        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+        var rabbit = builder.Configuration.GetConnectionString("RabbitMq") ?? "localhost";
+        cfg.Host(rabbit, "/", h => { h.Username("guest"); h.Password("guest"); });
         // Auto-create the saga's receive endpoint + bind published events to it.
         cfg.ConfigureEndpoints(ctx);
     });

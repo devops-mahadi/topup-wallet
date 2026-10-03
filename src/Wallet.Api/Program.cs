@@ -37,7 +37,8 @@ builder.Services.AddMassTransit(x =>
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
-        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+        var rabbit = builder.Configuration.GetConnectionString("RabbitMq") ?? "localhost";
+        cfg.Host(rabbit, "/", h => { h.Username("guest"); h.Password("guest"); });
 
         // Bind the consumers to the exact queue names the saga sends to.
         cfg.ReceiveEndpoint("wallet-debit", e =>
@@ -63,6 +64,10 @@ if (app.Environment.IsDevelopment())
 
 // Dev convenience: apply migrations at startup so the DB/schema exist.
 // (In production you'd run migrations as a separate deploy step, not at boot.)
+// If SQL Server isn't up yet (it may still be booting in Docker), Migrate throws
+// and the process exits — we let it crash. Docker's restart policy then restarts
+// the container, and it keeps retrying until SQL is ready. Crash-only / let-it-
+// crash: the orchestrator owns restarts, not bespoke retry code in the app.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<WalletDbContext>();

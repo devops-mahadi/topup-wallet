@@ -8,7 +8,7 @@ saga with compensation, an append-only audit ledger, and resilience on the
 external operator call).
 
 It's deliberately small enough to read end-to-end, and every non-obvious
-decision is written down in [`INTERVIEW-NOTES.md`](./INTERVIEW-NOTES.md).
+decision is documented in the design notes.
 
 ---
 
@@ -88,20 +88,27 @@ RabbitMQ; money can't be lost or double-moved at any step.
 - **Resilience** — Polly retry / timeout / circuit-breaker on the one
   uncontrolled external call; open circuit fails fast and the saga compensates.
 
-See [`INTERVIEW-NOTES.md`](./INTERVIEW-NOTES.md) for the *why* behind each,
-written as talking points tied to the exact file.
+Each of these is documented with the *why* behind it, tied to the exact file.
 
 ---
 
 ## Run it
 
-Prereqs: Docker, .NET 10 SDK.
+Prereqs: Docker.
 
 ```bash
-# 1. backing services (SQL Server/Azure SQL Edge, RabbitMQ, Redis, Mongo)
-docker compose up -d
+# everything — backing services AND both app services, built from source
+docker compose up -d --build
+```
 
-# 2. the two services (separate terminals)
+Wallet.Api → http://localhost:5001, TopUp.Api → http://localhost:5002.
+Both app services run in Alpine containers; compose points their connection
+strings at the other containers and health-gates startup on the broker/cache.
+
+Local dev without containers (needs the .NET 10 SDK):
+
+```bash
+docker compose up -d sqlserver rabbitmq redis mongo   # infra only
 dotnet run --project src/Wallet.Api --urls http://localhost:5001
 dotnet run --project src/TopUp.Api  --urls http://localhost:5002
 ```

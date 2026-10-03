@@ -1,0 +1,7 @@
+# Keep build artifacts and local cruft out of the Docker build context.
+**/bin/
+**/obj/
+**/.vs/
+**/.git/
+**/*.user
+tests/
