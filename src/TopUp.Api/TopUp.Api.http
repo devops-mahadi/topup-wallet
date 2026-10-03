@@ -1,40 +1,55 @@
 ### TopUp Wallet — TopUp.Api
-### The saga service: starts a top-up, which debits the wallet, charges the
-### (simulated) operator, and compensates (refunds) if the operator declines.
+### The saga service: a top-up debits the wallet, charges the (simulated)
+### operator, and compensates (refunds) if the operator declines.
+### Every /topups call requires a JWT access token as a Bearer header.
 ###
-### This file talks to BOTH services: it creates + funds an account on Wallet.Api
-### (:5001), then runs top-ups on TopUp.Api (:5002). Run top-to-bottom.
+### This file talks to THREE services: Auth (:5003) to log in, Wallet (:5001) to
+### create+fund the account, TopUp (:5002) to run top-ups. Run top-to-bottom.
 ###
-### Simulator decline rule (to exercise the compensation path):
-###   amount whose cents = .13  -> operator declines -> saga refunds
-###   phoneNumber containing "fail" -> declines
+### Simulator decline rule (exercises compensation):
+###   amount cents = .13  -> operator declines -> saga refunds
+###   phoneNumber contains "fail" -> declines
 
+@auth   = http://localhost:5003
 @wallet = http://localhost:5001
 @topup  = http://localhost:5002
 @contentType = application/json
 
-### Health
+### Health (open)
 GET {{topup}}/health
 
 ###
-# @name createAccount
-### Create a wallet account (on Wallet.Api) to top up from.
-POST {{wallet}}/accounts
+# @name login
+### Get a token first (any non-empty username/password).
+POST {{auth}}/auth/login
 Content-Type: {{contentType}}
 
-{
-  "ownerName": "Grace Hopper",
-  "currency": "USD",
-  "opening": 200
-}
+{ "username": "grace", "password": "any-non-empty" }
+
+###
+@token = {{login.response.body.$.accessToken}}
+
+###
+# @name createAccount
+### Create + fund a wallet account (on Wallet.Api) for this user.
+POST {{wallet}}/accounts
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "ownerName": "Grace Hopper", "currency": "USD", "opening": 200 }
 
 ###
 @accountId = {{createAccount.response.body.$.id}}
 
-### --- HAPPY PATH ---
-### Top up $5 to a normal number. Returns 202 + topUpId + fee.
-### Async result: wallet debited $5, operator charged OK, saga Completed.
+### Unauthenticated top-up -> 401
 POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880", "amount": 1, "idempotencyKey": "noauth" }
+
+### --- HAPPY PATH --- $5, operator OK, saga Completed. Returns 202 + fee.
+POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 {
@@ -44,11 +59,9 @@ Content-Type: {{contentType}}
   "idempotencyKey": "topup-happy-001"
 }
 
-### --- COMPENSATION PATH ---
-### Top up $5.13 — the simulator DECLINES (cents = .13).
-### Async result: wallet debited $5.13, operator declines, saga sends a refund,
-### balance ends back where it was. Check the ledger below: debit then credit.
+### --- COMPENSATION --- $5.13 declines, wallet debited then auto-refunded.
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 {
@@ -58,9 +71,9 @@ Content-Type: {{contentType}}
   "idempotencyKey": "topup-decline-001"
 }
 
-### --- DECLINE via phone number ---
-### Any phone containing "fail" is declined -> compensated the same way.
+### --- DECLINE via phone --- "fail" in the number declines -> compensated.
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 {
@@ -70,10 +83,9 @@ Content-Type: {{contentType}}
   "idempotencyKey": "topup-decline-002"
 }
 
-### --- PRICE CACHE ---
-### Repeat the $5 amount — the fee is served from the Redis cache (cache-aside).
-### Watch the TopUp.Api logs: first $5 call was a MISS, this one is a HIT.
+### --- PRICE CACHE --- repeat $5; fee served from Redis (watch logs: HIT).
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 {
@@ -83,45 +95,69 @@ Content-Type: {{contentType}}
   "idempotencyKey": "topup-cache-001"
 }
 
-### --- RATE LIMIT ---
-### Fire these back-to-back. The limit is 5 top-ups per account per minute, so
-### after the cap you get HTTP 429. (The requests above already count toward it,
-### so you may hit 429 before the 5th here — that's the shared window working.)
+### --- RATE LIMIT --- 5/account/min; after the cap -> 429.
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 { "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-1" }
 
 ###
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 { "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-2" }
 
 ###
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 { "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-3" }
 
 ###
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 { "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-4" }
 
 ###
 POST {{topup}}/topups
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 { "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-5" }
 
-### --- INSPECT RESULTS (on Wallet.Api) ---
-### Balance after all the above.
+### --- OWNERSHIP ON THE SAGA PATH ---
+### Log in as a different user; their top-up of grace's account is accepted at
+### the edge (202) but the saga's wallet debit is REFUSED (ownership violation),
+### so grace's balance is untouched. Check the wallet logs + balance below.
+# @name loginMallory
+POST {{auth}}/auth/login
+Content-Type: {{contentType}}
+
+{ "username": "mallory", "password": "any-non-empty" }
+
+###
+@malloryToken = {{loginMallory.response.body.$.accessToken}}
+
+###
+POST {{topup}}/topups
+Authorization: Bearer {{malloryToken}}
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 5, "idempotencyKey": "mallory-steal" }
+
+### --- INSPECT (as the owner) ---
 GET {{wallet}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
 
-### Ledger — see each debit and the refund credits that undo the declines.
+###
 GET {{wallet}}/accounts/{{accountId}}/transactions
+Authorization: Bearer {{token}}
 
-### Audit trail (MongoDB).
+###
 GET {{wallet}}/accounts/{{accountId}}/audit
+Authorization: Bearer {{token}}

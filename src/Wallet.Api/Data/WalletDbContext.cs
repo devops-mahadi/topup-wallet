@@ -19,6 +19,9 @@ public class WalletDbContext : DbContext
             e.Property(a => a.Balance).HasColumnType("decimal(19,4)");
             e.Property(a => a.Currency).HasMaxLength(3);
             e.Property(a => a.OwnerName).HasMaxLength(200);
+            e.Property(a => a.UserId).HasMaxLength(100);
+            e.HasIndex(a => a.UserId);   // look up a user's accounts
+
             // IsRowVersion() → SQL Server 'rowversion' column, the concurrency token.
             e.Property(a => a.RowVersion).IsRowVersion();
         });

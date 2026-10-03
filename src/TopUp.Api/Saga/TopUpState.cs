@@ -22,6 +22,7 @@ public class TopUpState : SagaStateMachineInstance
 
     // Business data we carry across steps (needed by later steps / compensation).
     public Guid AccountId { get; set; }
+    public string UserId { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
     public decimal Amount { get; set; }
 

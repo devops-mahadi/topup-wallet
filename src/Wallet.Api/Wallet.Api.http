@@ -1,22 +1,44 @@
 ### TopUp Wallet — Wallet.Api
 ### The money core: accounts, idempotent credit/debit, ledger, audit.
-### Run top-to-bottom: later requests reuse the account id from "createAccount"
-### via a request variable, so you don't copy/paste ids.
+### Every endpoint (except /health) requires a JWT access token as a Bearer
+### header. Run top-to-bottom: the first request logs in (on Auth.Api) and the
+### token + account id chain into the rest automatically.
 ###
-### Container run maps the service to :5001 (compose). Local `dotnet run` picks
-### its own port from launchSettings — override @host below if needed.
+### Container ports (compose): auth :5003, wallet :5001. Local `dotnet run` may
+### pick other ports — override the @vars below if needed.
 
-@host = http://localhost:5001
+@auth   = http://localhost:5003
+@host   = http://localhost:5001
 @contentType = application/json
 
-### Health
+### Health (open, no token)
 GET {{host}}/health
 
 ###
-# @name createAccount
-### Create an account opening with $100. The @name lets later requests read its
-### response (the generated account id).
+# @name login
+### Get a token first. Any non-empty username/password works (demo).
+POST {{auth}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "alice",
+  "password": "any-non-empty"
+}
+
+###
+@token = {{login.response.body.$.accessToken}}
+
+### Unauthenticated call -> 401 (no Bearer header on purpose)
 POST {{host}}/accounts
+Content-Type: {{contentType}}
+
+{ "ownerName": "No Auth", "currency": "USD", "opening": 10 }
+
+###
+# @name createAccount
+### Create an account (owned by the logged-in user). Token required.
+POST {{host}}/accounts
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
 {
@@ -28,61 +50,71 @@ Content-Type: {{contentType}}
 ###
 @accountId = {{createAccount.response.body.$.id}}
 
-### Fetch the account
+### Fetch the account (only the owner can)
 GET {{host}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
 
-### Credit $50 (idempotencyKey is REQUIRED and must be unique per real operation)
+### Credit $50
 POST {{host}}/accounts/{{accountId}}/credit
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
-{
-  "amount": 50,
-  "idempotencyKey": "credit-001"
-}
+{ "amount": 50, "idempotencyKey": "credit-001" }
 
 ### Debit $30
 POST {{host}}/accounts/{{accountId}}/debit
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
-{
-  "amount": 30,
-  "idempotencyKey": "debit-001"
-}
+{ "amount": 30, "idempotencyKey": "debit-001" }
 
-### Idempotency demo — REPLAY the same debit key.
-### Expect: wasReplay=true, SAME transactionId, balance unchanged (charged once).
+### Idempotency — REPLAY the same debit key.
+### Expect: wasReplay=true, SAME transactionId, balance unchanged.
 POST {{host}}/accounts/{{accountId}}/debit
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
-{
-  "amount": 30,
-  "idempotencyKey": "debit-001"
-}
+{ "amount": 30, "idempotencyKey": "debit-001" }
 
-### Insufficient funds — debit more than the balance.
-### Expect: 400 { "error": "insufficient_funds" }, balance untouched.
+### Insufficient funds -> 400 { "error": "insufficient_funds" }
 POST {{host}}/accounts/{{accountId}}/debit
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
-{
-  "amount": 999999,
-  "idempotencyKey": "debit-overdraw"
-}
+{ "amount": 999999, "idempotencyKey": "debit-overdraw" }
 
-### Validation — non-positive amount is rejected (400).
+### Validation — non-positive amount -> 400
 POST {{host}}/accounts/{{accountId}}/credit
+Authorization: Bearer {{token}}
 Content-Type: {{contentType}}
 
-{
-  "amount": 0,
-  "idempotencyKey": "credit-zero"
-}
+{ "amount": 0, "idempotencyKey": "credit-zero" }
 
-### Immutable ledger (SQL Server) — newest first.
+### Immutable ledger (SQL Server), newest first
 GET {{host}}/accounts/{{accountId}}/transactions
+Authorization: Bearer {{token}}
 
-### Audit trail (MongoDB) — append-only event log.
+### Audit trail (MongoDB), append-only
 GET {{host}}/accounts/{{accountId}}/audit
+Authorization: Bearer {{token}}
 
-### Not found — unknown account id.
-GET {{host}}/accounts/00000000-0000-0000-0000-000000000000
+### --- IDOR check: a DIFFERENT user cannot touch alice's account ---
+# @name loginBob
+POST {{auth}}/auth/login
+Content-Type: {{contentType}}
+
+{ "username": "bob", "password": "any-non-empty" }
+
+###
+@bobToken = {{loginBob.response.body.$.accessToken}}
+
+### Bob reads alice's account -> 403 Forbidden
+GET {{host}}/accounts/{{accountId}}
+Authorization: Bearer {{bobToken}}
+
+### Bob debits alice's account -> 403 Forbidden
+POST {{host}}/accounts/{{accountId}}/debit
+Authorization: Bearer {{bobToken}}
+Content-Type: {{contentType}}
+
+{ "amount": 10, "idempotencyKey": "bob-steal" }

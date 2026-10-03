@@ -9,6 +9,14 @@ public class Account
 {
     public Guid Id { get; set; }
 
+    /// <summary>
+    /// The user who owns this wallet — the JWT "sub" claim of the caller who
+    /// created it. Authorization at the HTTP edge checks this against the caller's
+    /// identity so one user can't read or move money on another user's account
+    /// (prevents the IDOR where you'd just guess/enumerate account ids).
+    /// </summary>
+    public string UserId { get; set; } = string.Empty;
+
     public string OwnerName { get; set; } = string.Empty;
 
     /// <summary>ISO 4217 currency code, e.g. "USD", "BDT".</summary>

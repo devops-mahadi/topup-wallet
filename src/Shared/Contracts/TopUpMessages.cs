@@ -21,16 +21,20 @@ namespace Shared.Contracts;
 public record StartTopUp(
     Guid TopUpId,
     Guid AccountId,
+    string UserId,            // the authenticated caller (JWT sub), carried for the ownership check
     string PhoneNumber,
     decimal Amount,
     string IdempotencyKey);
 
 // ----- Commands (TopUp -> Wallet) -----
 
-/// <summary>Tell the Wallet service to debit funds for a top-up.</summary>
+/// <summary>Tell the Wallet service to debit funds for a top-up. Carries the
+/// requesting UserId so the Wallet can verify the account belongs to that user
+/// (ownership check on the internal path too, not just the HTTP edge).</summary>
 public record DebitWallet(
     Guid TopUpId,
     Guid AccountId,
+    string UserId,
     decimal Amount,
     string IdempotencyKey);
 

@@ -1,0 +1,53 @@
+### TopUp Wallet — Auth.Api
+### Issues JWT access + refresh tokens. Stateless: nothing stored, tokens are
+### self-expiring and validated by signature. Log in, then call the wallet/topup
+### APIs with the access token as a Bearer header.
+###
+### DEMO credential rule: any non-empty username + password succeeds (real user
+### management / Auth0 is out of scope). The username becomes the token subject.
+
+@auth = http://localhost:5003
+@contentType = application/json
+
+### Health
+GET {{auth}}/health
+
+###
+# @name login
+### Log in. Returns { accessToken, refreshToken, tokenType, expiresInSeconds }.
+POST {{auth}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "alice",
+  "password": "any-non-empty"
+}
+
+###
+@accessToken = {{login.response.body.$.accessToken}}
+@refreshToken = {{login.response.body.$.refreshToken}}
+
+### Who am I (needs the ACCESS token)
+GET {{auth}}/auth/me
+Authorization: Bearer {{accessToken}}
+
+### Refresh — exchange the refresh token for a NEW access + refresh pair.
+POST {{auth}}/auth/refresh
+Content-Type: {{contentType}}
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### Empty credentials -> 400
+POST {{auth}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "",
+  "password": ""
+}
+
+### A refresh token must NOT work as an access token -> 401
+GET {{auth}}/auth/me
+Authorization: Bearer {{refreshToken}}

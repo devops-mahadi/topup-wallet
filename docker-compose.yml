@@ -70,6 +70,9 @@ services:
       ConnectionStrings__WalletDb: "Server=sqlserver,1433;Database=WalletDb;User Id=sa;Password=TopUpWallet!2026;TrustServerCertificate=True;Encrypt=True"
       ConnectionStrings__Mongo: "mongodb://mongo:27017"
       ConnectionStrings__RabbitMq: "rabbitmq"
+      # JWT signing key from the environment (shared across all 3 services). The
+      # :- default keeps the demo runnable; set JWT_SIGNING_KEY (or a vault) in real envs.
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -90,11 +93,27 @@ services:
     environment:
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "rabbitmq"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
     depends_on:
       rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Issues JWT access + refresh tokens. Stateless (no DB/cache) — tokens are
+  # self-expiring and validated by signature. Clients log in here, then call the
+  # wallet/topup APIs with the access token as a Bearer header.
+  auth-api:
+    build:
+      context: .
+      dockerfile: src/Auth.Api/Dockerfile
+    image: topup-wallet/auth-api
+    container_name: tw-auth-api
+    restart: unless-stopped
+    ports:
+      - "5003:8080"
+    environment:
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
 
 volumes:
   sqldata:

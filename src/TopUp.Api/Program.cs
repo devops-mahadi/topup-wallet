@@ -1,4 +1,10 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using MassTransit;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Shared.Auth;
 using Shared.Contracts;
 using StackExchange.Redis;
 using TopUp.Api.Gateways;
@@ -6,9 +12,44 @@ using TopUp.Api.Infrastructure;
 using TopUp.Api.Pricing;
 using TopUp.Api.Saga;
 
+// Keep JWT claim types verbatim ("sub" stays "sub", not remapped to a long URI).
+JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+
+// ---- Authentication: validate JWT access tokens (same key/issuer as Auth.Api) ----
+var signingKey = builder.Configuration[JwtConventions.SigningKeyConfigPath]
+    ?? throw new InvalidOperationException(
+        $"Missing JWT signing key at '{JwtConventions.SigningKeyConfigPath}'. Set Jwt__SigningKey.");
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(opt =>
+    {
+        opt.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = JwtConventions.Issuer,
+            ValidateAudience = true,
+            ValidAudience = JwtConventions.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        opt.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = ctx =>
+            {
+                var type = ctx.Principal?.FindFirst(JwtConventions.TokenTypeClaim)?.Value;
+                if (type != JwtConventions.AccessTokenType)
+                    ctx.Fail("Access token required.");
+                return Task.CompletedTask;
+            }
+        };
+    });
+builder.Services.AddAuthorization();
 
 // Redis connection — one multiplexer for the whole app (it's thread-safe and
 // multiplexes; you do NOT open a connection per call).
@@ -55,12 +96,20 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "topup" }));
 
 // --- Start a top-up (kicks off the saga) ---
+// Requires a valid access token. The caller's id (JWT sub) is carried into the
+// saga so the Wallet can verify the account belongs to this user before debiting.
 // Returns 202 Accepted + the TopUpId; the flow then runs async across services.
-app.MapPost("/topups", async (TopUpRequest req, IBus bus, RateLimiter limiter, PriceService prices) =>
+app.MapPost("/topups", async (TopUpRequest req, IBus bus, RateLimiter limiter, PriceService prices, ClaimsPrincipal user) =>
 {
+    var userId = user.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                 ?? user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
     // Fraud guard: cap top-ups per account per minute (Redis-backed, cross-instance).
     if (!await limiter.AllowAsync(req.AccountId, maxPerWindow: 5, window: TimeSpan.FromMinutes(1)))
         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
@@ -70,11 +119,11 @@ app.MapPost("/topups", async (TopUpRequest req, IBus bus, RateLimiter limiter, P
 
     var topUpId = Guid.CreateVersion7();   // correlation id for the whole saga
     await bus.Publish(new StartTopUp(
-        topUpId, req.AccountId, req.PhoneNumber, req.Amount, req.IdempotencyKey));
+        topUpId, req.AccountId, userId, req.PhoneNumber, req.Amount, req.IdempotencyKey));
 
     return Results.Accepted($"/topups/{topUpId}",
         new { topUpId, status = "accepted", fee });
-});
+}).RequireAuthorization();
 
 app.Run();
 

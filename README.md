@@ -32,6 +32,10 @@ RabbitMQ; money can't be lost or double-moved at any step.
 ## Architecture
 
 ```
+ client ─login─► Auth.Api ─► JWT access + refresh tokens
+   │             (stateless)
+   │  access token (Bearer) on every call below
+   ▼
             HTTP                     RabbitMQ (MassTransit)
  client ──────────► TopUp.Api ───────────────────────────────► Wallet.Api
                     (saga brain)   DebitWallet / RefundWallet   (money core)
@@ -45,13 +49,22 @@ RabbitMQ; money can't be lost or double-moved at any step.
            └─► MongoDB     (append-only audit trail)
 ```
 
+- **Auth.Api** — issues JWT access + refresh tokens on login. Stateless (no
+  store): tokens are self-expiring and validated by signature. Clients send the
+  access token as a `Bearer` header to the other services.
 - **Wallet.Api** — owns money. One DB transaction per move: UPDATE balance
   (rowversion-checked) + INSERT ledger row + INSERT idempotency record. Consumes
-  `DebitWallet` / `RefundWallet` commands, publishes result events.
+  `DebitWallet` / `RefundWallet` commands, publishes result events. Enforces
+  account ownership (a user can only touch their own wallet).
 - **TopUp.Api** — owns the flow. A MassTransit state-machine saga drives
   debit → operator → confirm/compensate. Hosts the operator gateway, Redis rate
   limiter and price cache.
-- **Shared** — message contracts only (pure POCO records, no dependencies).
+- **Shared** — message contracts + JWT conventions (pure POCO, no dependencies).
+
+All three services validate the same JWT (shared signing key, issuer, audience);
+access tokens only (a refresh token can't call the APIs). Each account is bound
+to its creator's user id, and ownership is checked both at the HTTP edge and on
+the internal saga path.
 
 ---
 
@@ -101,37 +114,48 @@ Prereqs: Docker.
 docker compose up -d --build
 ```
 
-Wallet.Api → http://localhost:5001, TopUp.Api → http://localhost:5002.
-Both app services run in Alpine containers; compose points their connection
-strings at the other containers and health-gates startup on the broker/cache.
+Auth.Api → http://localhost:5003, Wallet.Api → http://localhost:5001,
+TopUp.Api → http://localhost:5002. All run in Alpine containers; compose points
+their connection strings at the other containers, passes a shared JWT signing
+key, and health-gates startup on the broker/cache.
 
 Local dev without containers (needs the .NET 10 SDK):
 
 ```bash
 docker compose up -d sqlserver rabbitmq redis mongo   # infra only
+dotnet run --project src/Auth.Api   --urls http://localhost:5003
 dotnet run --project src/Wallet.Api --urls http://localhost:5001
 dotnet run --project src/TopUp.Api  --urls http://localhost:5002
 ```
 
 ### Try it
 
+Every endpoint except `/health` needs a JWT. Log in first, then send the access
+token as a `Bearer` header. (Demo login accepts any non-empty credentials.)
+
 ```bash
-# create + fund an account
-ACC=$(curl -s -X POST http://localhost:5001/accounts \
+# 1. log in -> access token
+TOKEN=$(curl -s -X POST http://localhost:5003/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"demo","password":"any"}' | jq -r .accessToken)
+AUTH="Authorization: Bearer $TOKEN"
+
+# 2. create + fund an account (owned by "demo")
+ACC=$(curl -s -X POST http://localhost:5001/accounts -H "$AUTH" \
   -H 'Content-Type: application/json' \
   -d '{"ownerName":"Demo","currency":"USD","opening":100}' | jq -r .id)
 
-# happy-path top-up  -> wallet debited, operator charged, balance 95
-curl -s -X POST http://localhost:5002/topups -H 'Content-Type: application/json' \
+# 3. happy-path top-up  -> wallet debited, operator charged, balance 95
+curl -s -X POST http://localhost:5002/topups -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"accountId\":\"$ACC\",\"phoneNumber\":\"+880171\",\"amount\":5,\"idempotencyKey\":\"ok-1\"}"
 
-# decline path (amount .13 cents) -> debited then auto-refunded, balance back to 95
-curl -s -X POST http://localhost:5002/topups -H 'Content-Type: application/json' \
+# 4. decline path (amount .13 cents) -> debited then auto-refunded, balance back to 95
+curl -s -X POST http://localhost:5002/topups -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"accountId\":\"$ACC\",\"phoneNumber\":\"+880171\",\"amount\":5.13,\"idempotencyKey\":\"fail-1\"}"
 
-# inspect: immutable SQL ledger + Mongo audit trail
-curl -s http://localhost:5001/accounts/$ACC/transactions | jq
-curl -s http://localhost:5001/accounts/$ACC/audit        | jq
+# 5. inspect: immutable SQL ledger + Mongo audit trail
+curl -s http://localhost:5001/accounts/$ACC/transactions -H "$AUTH" | jq
+curl -s http://localhost:5001/accounts/$ACC/audit        -H "$AUTH" | jq
 ```
 
 ### Test
@@ -153,7 +177,20 @@ Production-shaped, not production-complete. The gaps I'd close next, in order:
   persists state (EF/Redis/Mongo) so a restart resumes in-flight top-ups.
 - **Real operator gateway** — `SimulatedOperatorGateway` → an HTTP impl (the
   Polly wrapper already handles resilience).
-- **AuthN/Z, secrets in a vault, TLS/mTLS between services.**
+- **Real user management** — `Auth.Api` login currently accepts any non-empty
+  credentials (the token subject is the username); the seam is where a user store
+  / IdP (Auth0, Entra ID) plugs in.
+- **Revocable refresh tokens** — tokens are stateless and self-expiring, so there
+  is no pre-expiry revocation (no server-side logout-kills-session, no
+  refresh-reuse detection). Production persists hashed refresh tokens or delegates
+  to an IdP.
+- **Secrets in a vault** — the JWT signing key and DB password come from env in
+  compose; production sources them from a vault (Key Vault / Secrets Manager).
+- **Transport security (TLS/mTLS)** — left to the platform, not baked into the
+  app: in a cluster, an Istio sidecar provides mTLS between services
+  transparently; otherwise each service sits behind an HTTPS ingress / public
+  DNS + TLS cert. Caller *identity* is already carried by the JWT, so the app
+  doesn't duplicate it.
 
 ---
 

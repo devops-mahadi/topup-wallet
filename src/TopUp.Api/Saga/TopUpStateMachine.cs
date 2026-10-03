@@ -59,6 +59,7 @@ public class TopUpStateMachine : MassTransitStateMachine<TopUpState>
                 {
                     var m = ctx.Message;
                     ctx.Saga.AccountId = m.AccountId;
+                    ctx.Saga.UserId = m.UserId;
                     ctx.Saga.PhoneNumber = m.PhoneNumber;
                     ctx.Saga.Amount = m.Amount;
                     ctx.Saga.DebitIdempotencyKey = m.IdempotencyKey;
@@ -69,6 +70,7 @@ public class TopUpStateMachine : MassTransitStateMachine<TopUpState>
                 .Send(new Uri("queue:wallet-debit"), ctx => new DebitWallet(
                     ctx.Saga.CorrelationId,
                     ctx.Saga.AccountId,
+                    ctx.Saga.UserId,
                     ctx.Saga.Amount,
                     ctx.Saga.DebitIdempotencyKey))
                 .TransitionTo(ChargingOperator));
