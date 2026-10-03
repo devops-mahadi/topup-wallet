@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Local-only interview prep notes — not published
+INTERVIEW-NOTES.md
