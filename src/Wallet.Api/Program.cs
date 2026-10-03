@@ -197,10 +197,12 @@ app.MapGet("/accounts/{id:guid}/transactions", async (Guid id, WalletDbContext d
 }).RequireAuthorization();
 
 // --- Audit trail (append-only event log, from MongoDB) ---
-app.MapGet("/accounts/{id:guid}/audit", async (Guid id, IAuditLog audit, WalletDbContext db, ClaimsPrincipal user) =>
+// Paginated: ?page=1&pageSize=50 (defaults). Never loads the whole trail at once.
+app.MapGet("/accounts/{id:guid}/audit", async (Guid id, IAuditLog audit, WalletDbContext db, ClaimsPrincipal user,
+        int page = 1, int pageSize = 50) =>
 {
     var (_, error) = await LoadOwned(db, id, user);
-    return error ?? Results.Ok(await audit.ForAccountAsync(id));
+    return error ?? Results.Ok(await audit.ForAccountAsync(id, page, pageSize));
 }).RequireAuthorization();
 
 // ====================================================================
