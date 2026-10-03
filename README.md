@@ -241,13 +241,17 @@ collector. If the apps are already running from a plain `up`, add
 Without `OTEL_EXPORTER_OTLP_ENDPOINT` set, the apps are instrumented but export
 nowhere, so the core services never wait on or are slowed by these backends.
 
-**View it** (with the profile up) after running the Try-it flow:
+**View it in the browser** (with the profile up) after running the Try-it flow —
+open these URLs:
 
-| UI | URL | Shows |
+| UI | Open in browser | First thing to do there |
 |---|---|---|
-| **Jaeger** | http://localhost:16686 | pick `topup-api` → a top-up trace spanning HTTP → RabbitMQ → Wallet → SQL/Redis |
-| **Grafana** | http://localhost:3000 | dashboards/queries over Prometheus (metrics), Loki (logs), Jaeger (traces); anon admin, no login |
-| **Prometheus** | http://localhost:9090 | raw metric queries (e.g. `funding_deposits_created_total`) |
+| **Jaeger** (traces) | **http://localhost:16686** | Service dropdown → `topup-api` → **Find Traces** → click a trace → see the span waterfall spanning HTTP → RabbitMQ → Wallet → SQL/Redis |
+| **Grafana** (all three) | **http://localhost:3000** | anon admin, no login. **Explore** → choose a datasource (Jaeger / Prometheus / Loki) — all three are pre-provisioned |
+| **Prometheus** (metrics) | **http://localhost:9090** | **Graph** tab → query e.g. `funding_deposits_created_total` → Execute |
+
+> If a UI doesn't load, confirm the stack is up with the profile:
+> `docker compose --profile observability --env-file .env.observability ps`.
 
 **Dev toggle, no backend:** set `OTEL_CONSOLE=true` to print traces/metrics/logs
 straight to the container logs instead — `docker compose logs -f wallet-api`.
