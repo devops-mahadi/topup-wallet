@@ -231,9 +231,12 @@ config, not a code change.
 docker compose up -d
 
 # core + the observability stack (needs ~1-2GB more memory)
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
-  docker compose --profile observability up -d
+docker compose --profile observability --env-file .env.observability up -d
 ```
+
+(`.env.observability` sets `OTEL_EXPORTER_OTLP_ENDPOINT` to the in-compose
+collector. If the apps are already running from a plain `up`, add
+`--force-recreate wallet-api topup-api auth-api` so they pick up the endpoint.)
 
 Without `OTEL_EXPORTER_OTLP_ENDPOINT` set, the apps are instrumented but export
 nowhere, so the core services never wait on or are slowed by these backends.
