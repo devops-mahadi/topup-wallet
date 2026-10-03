@@ -136,33 +136,62 @@ dotnet run --project src/TopUp.Api  --urls http://localhost:5002
 
 ### Try it
 
-Every endpoint except `/health` needs a JWT. Log in first, then send the access
-token as a `Bearer` header. (Demo login accepts any non-empty credentials.)
+**Every endpoint except `/health` and the PSP webhook needs a JWT.** You log in
+once at Auth.Api, then send the access token as a `Bearer` header on every call
+to Wallet.Api and TopUp.Api. (Demo login accepts any non-empty credentials; the
+username becomes the token's subject and the account's owner.)
 
 ```bash
-# 1. log in -> access token
+# ── 1. LOG IN → access token (send it as a Bearer header on everything below) ──
 TOKEN=$(curl -s -X POST http://localhost:5003/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"demo","password":"any"}' | jq -r .accessToken)
 AUTH="Authorization: Bearer $TOKEN"
 
-# 2. create + fund an account (owned by "demo")
+# ── 2. create an account (starts at 0; owned by "demo") ──
 ACC=$(curl -s -X POST http://localhost:5001/accounts -H "$AUTH" \
   -H 'Content-Type: application/json' \
-  -d '{"ownerName":"Demo","currency":"USD","opening":100}' | jq -r .id)
+  -d '{"ownerName":"Demo","currency":"USD","opening":0}' | jq -r .id)
 
-# 3. happy-path top-up  -> wallet debited, operator charged, balance 95
+# ── 3. FUND IT with a card (money IN via the payment gateway) ──
+# The browser would tokenize the card with the PSP; here we pass a demo token.
+# This creates a PENDING deposit — the balance is NOT credited yet.
+DEP=$(curl -s -X POST http://localhost:5001/accounts/$ACC/deposits -H "$AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '{"paymentToken":"tok_ok","amount":100}' | jq -r .depositId)
+
+# the money lands only when the PSP's SIGNED webhook confirms the charge.
+# get a correctly-signed webhook payload (demo helper), then POST it:
+PAYLOAD=$(curl -s -X POST http://localhost:5001/accounts/$ACC/deposits/$DEP/webhook-payload -H "$AUTH")
+BODY=$(echo "$PAYLOAD" | jq -r .body); SIG=$(echo "$PAYLOAD" | jq -r .signature)
+curl -s -X POST http://localhost:5001/webhooks/payment \
+  -H "X-Signature: $SIG" -H 'Content-Type: application/json' -d "$BODY"
+# balance is now 100 (POST the same webhook again → still 100: idempotent)
+
+# ── 4. TOP UP a phone (money OUT via the saga) ──
+# happy path: wallet debited, operator charged → balance 95
 curl -s -X POST http://localhost:5002/topups -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"accountId\":\"$ACC\",\"phoneNumber\":\"+880171\",\"amount\":5,\"idempotencyKey\":\"ok-1\"}"
 
-# 4. decline path (amount .13 cents) -> debited then auto-refunded, balance back to 95
+# decline path (amount ending .13): debited then auto-refunded → back to 95
 curl -s -X POST http://localhost:5002/topups -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"accountId\":\"$ACC\",\"phoneNumber\":\"+880171\",\"amount\":5.13,\"idempotencyKey\":\"fail-1\"}"
 
-# 5. inspect: immutable SQL ledger + Mongo audit trail
+# ── 5. inspect: balance, immutable SQL ledger, Mongo audit trail ──
+curl -s http://localhost:5001/accounts/$ACC              -H "$AUTH" | jq
 curl -s http://localhost:5001/accounts/$ACC/transactions -H "$AUTH" | jq
 curl -s http://localhost:5001/accounts/$ACC/audit        -H "$AUTH" | jq
+
+# ── 6. (optional) ownership: a DIFFERENT user can't touch this account ──
+OTHER=$(curl -s -X POST http://localhost:5003/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"mallory","password":"any"}' | jq -r .accessToken)
+curl -s -o /dev/null -w 'mallory reads demo account -> HTTP %{http_code}\n' \
+  http://localhost:5001/accounts/$ACC -H "Authorization: Bearer $OTHER"   # -> 403
 ```
+
+> No token (or a refresh token used as a bearer) → **401**. Someone else's account
+> → **403**. The PSP webhook is the one open endpoint — it's authenticated by its
+> HMAC **signature**, not a JWT; a forged signature → **401**.
 
 ### Test
 
