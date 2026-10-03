@@ -4,8 +4,10 @@ using System.Text;
 using MassTransit;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Trace;
 using Shared.Auth;
 using Shared.Contracts;
+using Shared.Observability;
 using StackExchange.Redis;
 using TopUp.Api.Gateways;
 using TopUp.Api.Infrastructure;
@@ -56,6 +58,14 @@ builder.Services.AddAuthorization();
 var redisConn = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(redisConn));
+
+// OpenTelemetry over OTLP. TopUp adds Redis + MassTransit tracing so cache calls
+// and the saga's bus messages appear in the trace, with context propagating
+// across RabbitMQ so a whole top-up is one distributed trace. No backend bundled.
+builder.Services.AddObservability(builder.Configuration, "topup-api",
+    configureTracing: t => t
+        .AddRedisInstrumentation()
+        .AddSource("MassTransit"));
 
 // Redis-backed rate limiter (fraud guard) + price cache (cache-aside).
 builder.Services.AddSingleton<RateLimiter>();

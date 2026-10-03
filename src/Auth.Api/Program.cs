@@ -5,6 +5,7 @@ using Auth.Api;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Shared.Auth;
+using Shared.Observability;
 
 // Keep JWT claim types as-is ("sub" stays "sub"). Without this, the handler
 // remaps "sub" to the long ClaimTypes.NameIdentifier URI, so FindFirst("sub") misses.
@@ -14,6 +15,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<TokenFactory>();
+
+// OpenTelemetry (traces + metrics + logs) over OTLP. No backend bundled — set
+// OTEL_EXPORTER_OTLP_ENDPOINT to export. Auth only does HTTP, so no extras.
+builder.Services.AddObservability(builder.Configuration, "auth-api");
 
 // Auth.Api validates tokens too (for /auth/me and, crucially, /auth/refresh,
 // which must accept a REFRESH token). Same signing key + issuer/audience as the

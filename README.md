@@ -199,6 +199,38 @@ curl -s -o /dev/null -w 'mallory reads demo account -> HTTP %{http_code}\n' \
 dotnet test
 ```
 
+### Observability
+
+All three services are instrumented with **OpenTelemetry** — traces, metrics and
+logs — exported over **OTLP** (the vendor-neutral format). Auto-instrumentation
+covers ASP.NET Core, HttpClient, EF Core (Wallet), Redis (TopUp) and **MassTransit**,
+so a single top-up is one distributed trace spanning HTTP → RabbitMQ → Wallet →
+the external gateway. Custom business metrics (`funding.deposits.created`,
+`funding.deposits.credited`, `funding.webhook.rejected`) are emitted too.
+
+**No backend is bundled.** How you view the data:
+
+- **Export to a backend (the real way).** Point the services at any OTLP
+  collector/backend and browse in its UI — nothing in the app changes:
+
+  ```bash
+  # example: run Jaeger and send traces to it
+  docker run -d --name jaeger -p 16686:16686 -p 4317:4317 jaegertracing/all-in-one
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317 docker compose up -d
+  # open http://localhost:16686 and follow a top-up across all services
+  ```
+
+  Any OTLP backend works the same way: Grafana Tempo/Loki/Prometheus, Datadog,
+  Honeycomb, or an OpenTelemetry Collector fanning out to several.
+
+- **Nothing set = instrumented but silent.** With no `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  telemetry is generated but not exported anywhere (no logs, no endpoint) — the
+  instrumentation simply costs nothing until a backend is attached.
+
+OTLP is a **push** model (the app pushes to the collector); you don't poll the
+app for telemetry. Metrics *can* also be exposed for Prometheus scraping by adding
+that exporter, if a pull model is preferred.
+
 ---
 
 ## Known limits (deliberate, and named on purpose)

@@ -9,7 +9,9 @@ using Microsoft.IdentityModel.Tokens;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
+using OpenTelemetry.Trace;
 using Shared.Auth;
+using Shared.Observability;
 using Wallet.Api.Audit;
 using Wallet.Api.Consumers;
 using Wallet.Api.Data;
@@ -40,6 +42,18 @@ builder.Services.AddSingleton<IAuditLog, AuditLog>();
 // (Stripe/Adyen/SSLCommerz) swaps in here without touching the endpoints.
 builder.Services.AddSingleton<SimulatedPaymentGateway>();
 builder.Services.AddSingleton<IPaymentGateway>(sp => sp.GetRequiredService<SimulatedPaymentGateway>());
+
+// Custom business metrics (deposits, webhook rejections) via a named Meter.
+builder.Services.AddSingleton<FundingMetrics>();
+
+// OpenTelemetry over OTLP. Wallet adds EF Core + MassTransit tracing so DB
+// queries and consumed bus messages appear in the trace, and the custom funding
+// Meter so business metrics export alongside the runtime ones. No backend bundled.
+builder.Services.AddObservability(builder.Configuration, "wallet-api",
+    configureTracing: t => t
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddSource("MassTransit"),    // MassTransit emits spans under this source
+    configureMetrics: m => m.AddMeter(FundingMetrics.MeterName));
 
 // Scoped: one WalletService (and its DbContext) per HTTP request / message.
 builder.Services.AddScoped<WalletService>();
@@ -214,7 +228,7 @@ app.MapGet("/accounts/{id:guid}/audit", async (Guid id, IAuditLog audit, WalletD
 // (PAN never hits us). We create the charge at the PSP and record a PENDING
 // deposit. We do NOT credit yet — the webhook is the source of truth.
 app.MapPost("/accounts/{id:guid}/deposits",
-    async (Guid id, DepositRequest req, WalletDbContext db, IPaymentGateway psp, ClaimsPrincipal user) =>
+    async (Guid id, DepositRequest req, WalletDbContext db, IPaymentGateway psp, ClaimsPrincipal user, FundingMetrics metrics) =>
 {
     var (acc, error) = await LoadOwned(db, id, user);
     if (error is not null) return error;
@@ -233,6 +247,7 @@ app.MapPost("/accounts/{id:guid}/deposits",
     };
     db.Deposits.Add(deposit);
     await db.SaveChangesAsync();
+    metrics.DepositCreated();
 
     // Map PSP status to a client response. Succeeded here means "charge accepted";
     // the wallet is credited only when the confirming webhook arrives.
@@ -250,14 +265,18 @@ app.MapPost("/accounts/{id:guid}/deposits",
 // credit the wallet IDEMPOTENTLY using the PSP event id as the key — the PSP
 // retries webhooks, so this must be safe to receive many times.
 app.MapPost("/webhooks/payment",
-    async (HttpRequest http, WalletDbContext db, WalletService wallet, IPaymentGateway psp) =>
+    async (HttpRequest http, WalletDbContext db, WalletService wallet, IPaymentGateway psp, FundingMetrics metrics) =>
 {
     using var reader = new StreamReader(http.Body);
     var rawBody = await reader.ReadToEndAsync();
     var signature = http.Headers["X-Signature"].ToString();
 
     var evt = psp.VerifyAndParseWebhook(rawBody, signature);
-    if (evt is null) return Results.Unauthorized();   // bad/missing signature → reject
+    if (evt is null)
+    {
+        metrics.WebhookRejected();            // bad signature — track as a fraud/forgery signal
+        return Results.Unauthorized();        // reject
+    }
 
     var deposit = await db.Deposits.FirstOrDefaultAsync(d => d.ProviderIntentId == evt.ProviderIntentId);
     if (deposit is null) return Results.NotFound(new { error = "unknown_intent" });
@@ -270,6 +289,7 @@ app.MapPost("/webhooks/payment",
         await wallet.CreditAsync(new MoneyRequest(deposit.AccountId, deposit.Amount, $"psp:{evt.EventId}"));
         deposit.State = DepositState.Succeeded;
         deposit.Credited = true;
+        metrics.DepositCredited();
     }
     else if (evt.Status == DepositStatus.Declined)
     {

@@ -90,6 +90,9 @@ services:
       # JWT signing key from the environment (shared across all 3 services). The
       # :- default keeps the demo runnable; set JWT_SIGNING_KEY (or a vault) in real envs.
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
+      # OpenTelemetry: point this at any OTLP backend/collector to export traces+
+      # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -111,6 +114,9 @@ services:
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "rabbitmq"
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
+      # OpenTelemetry: point this at any OTLP backend/collector to export traces+
+      # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -133,6 +139,9 @@ services:
       - "5003:8080"
     environment:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
+      # OpenTelemetry: point this at any OTLP backend/collector to export traces+
+      # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
 
 volumes:
   sqldata:
