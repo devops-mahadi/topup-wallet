@@ -1,6 +1,127 @@
-@TopUp.Api_HostAddress = http://localhost:5288
+### TopUp Wallet — TopUp.Api
+### The saga service: starts a top-up, which debits the wallet, charges the
+### (simulated) operator, and compensates (refunds) if the operator declines.
+###
+### This file talks to BOTH services: it creates + funds an account on Wallet.Api
+### (:5001), then runs top-ups on TopUp.Api (:5002). Run top-to-bottom.
+###
+### Simulator decline rule (to exercise the compensation path):
+###   amount whose cents = .13  -> operator declines -> saga refunds
+###   phoneNumber containing "fail" -> declines
 
-GET {{TopUp.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+@wallet = http://localhost:5001
+@topup  = http://localhost:5002
+@contentType = application/json
+
+### Health
+GET {{topup}}/health
 
 ###
+# @name createAccount
+### Create a wallet account (on Wallet.Api) to top up from.
+POST {{wallet}}/accounts
+Content-Type: {{contentType}}
+
+{
+  "ownerName": "Grace Hopper",
+  "currency": "USD",
+  "opening": 200
+}
+
+###
+@accountId = {{createAccount.response.body.$.id}}
+
+### --- HAPPY PATH ---
+### Top up $5 to a normal number. Returns 202 + topUpId + fee.
+### Async result: wallet debited $5, operator charged OK, saga Completed.
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{
+  "accountId": "{{accountId}}",
+  "phoneNumber": "+8801711000000",
+  "amount": 5,
+  "idempotencyKey": "topup-happy-001"
+}
+
+### --- COMPENSATION PATH ---
+### Top up $5.13 — the simulator DECLINES (cents = .13).
+### Async result: wallet debited $5.13, operator declines, saga sends a refund,
+### balance ends back where it was. Check the ledger below: debit then credit.
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{
+  "accountId": "{{accountId}}",
+  "phoneNumber": "+8801711000000",
+  "amount": 5.13,
+  "idempotencyKey": "topup-decline-001"
+}
+
+### --- DECLINE via phone number ---
+### Any phone containing "fail" is declined -> compensated the same way.
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{
+  "accountId": "{{accountId}}",
+  "phoneNumber": "fail-0170000000",
+  "amount": 7,
+  "idempotencyKey": "topup-decline-002"
+}
+
+### --- PRICE CACHE ---
+### Repeat the $5 amount — the fee is served from the Redis cache (cache-aside).
+### Watch the TopUp.Api logs: first $5 call was a MISS, this one is a HIT.
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{
+  "accountId": "{{accountId}}",
+  "phoneNumber": "+8801711000000",
+  "amount": 5,
+  "idempotencyKey": "topup-cache-001"
+}
+
+### --- RATE LIMIT ---
+### Fire these back-to-back. The limit is 5 top-ups per account per minute, so
+### after the cap you get HTTP 429. (The requests above already count toward it,
+### so you may hit 429 before the 5th here — that's the shared window working.)
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-1" }
+
+###
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-2" }
+
+###
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-3" }
+
+###
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-4" }
+
+###
+POST {{topup}}/topups
+Content-Type: {{contentType}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+880171", "amount": 1, "idempotencyKey": "rl-5" }
+
+### --- INSPECT RESULTS (on Wallet.Api) ---
+### Balance after all the above.
+GET {{wallet}}/accounts/{{accountId}}
+
+### Ledger — see each debit and the refund credits that undo the declines.
+GET {{wallet}}/accounts/{{accountId}}/transactions
+
+### Audit trail (MongoDB).
+GET {{wallet}}/accounts/{{accountId}}/audit

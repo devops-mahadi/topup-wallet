@@ -1,6 +1,88 @@
-@Wallet.Api_HostAddress = http://localhost:5049
+### TopUp Wallet — Wallet.Api
+### The money core: accounts, idempotent credit/debit, ledger, audit.
+### Run top-to-bottom: later requests reuse the account id from "createAccount"
+### via a request variable, so you don't copy/paste ids.
+###
+### Container run maps the service to :5001 (compose). Local `dotnet run` picks
+### its own port from launchSettings — override @host below if needed.
 
-GET {{Wallet.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+@host = http://localhost:5001
+@contentType = application/json
+
+### Health
+GET {{host}}/health
 
 ###
+# @name createAccount
+### Create an account opening with $100. The @name lets later requests read its
+### response (the generated account id).
+POST {{host}}/accounts
+Content-Type: {{contentType}}
+
+{
+  "ownerName": "Ada Lovelace",
+  "currency": "USD",
+  "opening": 100
+}
+
+###
+@accountId = {{createAccount.response.body.$.id}}
+
+### Fetch the account
+GET {{host}}/accounts/{{accountId}}
+
+### Credit $50 (idempotencyKey is REQUIRED and must be unique per real operation)
+POST {{host}}/accounts/{{accountId}}/credit
+Content-Type: {{contentType}}
+
+{
+  "amount": 50,
+  "idempotencyKey": "credit-001"
+}
+
+### Debit $30
+POST {{host}}/accounts/{{accountId}}/debit
+Content-Type: {{contentType}}
+
+{
+  "amount": 30,
+  "idempotencyKey": "debit-001"
+}
+
+### Idempotency demo — REPLAY the same debit key.
+### Expect: wasReplay=true, SAME transactionId, balance unchanged (charged once).
+POST {{host}}/accounts/{{accountId}}/debit
+Content-Type: {{contentType}}
+
+{
+  "amount": 30,
+  "idempotencyKey": "debit-001"
+}
+
+### Insufficient funds — debit more than the balance.
+### Expect: 400 { "error": "insufficient_funds" }, balance untouched.
+POST {{host}}/accounts/{{accountId}}/debit
+Content-Type: {{contentType}}
+
+{
+  "amount": 999999,
+  "idempotencyKey": "debit-overdraw"
+}
+
+### Validation — non-positive amount is rejected (400).
+POST {{host}}/accounts/{{accountId}}/credit
+Content-Type: {{contentType}}
+
+{
+  "amount": 0,
+  "idempotencyKey": "credit-zero"
+}
+
+### Immutable ledger (SQL Server) — newest first.
+GET {{host}}/accounts/{{accountId}}/transactions
+
+### Audit trail (MongoDB) — append-only event log.
+GET {{host}}/accounts/{{accountId}}/audit
+
+### Not found — unknown account id.
+GET {{host}}/accounts/00000000-0000-0000-0000-000000000000
