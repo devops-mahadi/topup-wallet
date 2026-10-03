@@ -92,7 +92,7 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
@@ -118,7 +118,7 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
@@ -145,16 +145,27 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
 
-  # ---- Observability backends ----
+  # ---- Observability backends (opt-in via the "observability" profile) ----
+  # These are memory-heavy (~1-2GB together), so they're behind a compose profile
+  # and do NOT start with the core stack. The main services run lean by default.
+  #
+  #   core only:         docker compose up -d
+  #   core + telemetry:  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+  #                        docker compose --profile observability up -d
+  #
+  # (Without the endpoint set, the apps are instrumented but export nowhere, so the
+  # core stack never waits on or is slowed by these backends.)
+  #
   # Apps push OTLP to the collector; the collector fans out per signal:
   #   traces -> Jaeger, metrics -> Prometheus (scrape), logs -> Loki.
   # Grafana is the single UI querying all three. None of this changes app code.
 
   otel-collector:
+    profiles: ["observability"]
     image: otel/opentelemetry-collector-contrib:0.115.1
     container_name: tw-otel-collector
     command: ["--config=/etc/otel-collector-config.yaml"]
@@ -168,6 +179,7 @@ services:
       - loki
 
   jaeger:
+    profiles: ["observability"]
     # all-in-one: receives OTLP, stores traces, serves the UI.
     image: jaegertracing/all-in-one:1.62.0
     container_name: tw-jaeger
@@ -177,6 +189,7 @@ services:
       - "16686:16686"   # Jaeger UI (browser)
 
   prometheus:
+    profiles: ["observability"]
     image: prom/prometheus:v2.55.1
     container_name: tw-prometheus
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
@@ -186,6 +199,7 @@ services:
       - "9090:9090"     # Prometheus UI
 
   loki:
+    profiles: ["observability"]
     image: grafana/loki:3.2.1
     container_name: tw-loki
     command: ["-config.file=/etc/loki/local-config.yaml"]
@@ -193,6 +207,7 @@ services:
       - "3100:3100"
 
   grafana:
+    profiles: ["observability"]
     image: grafana/grafana:11.3.1
     container_name: tw-grafana
     environment:

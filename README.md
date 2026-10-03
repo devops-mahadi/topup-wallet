@@ -208,9 +208,10 @@ so a single top-up is one distributed trace spanning HTTP → RabbitMQ → Walle
 the external gateway. Custom business metrics (`funding.deposits.created`,
 `funding.deposits.credited`, `funding.webhook.rejected`) are emitted too.
 
-**The full backend stack ships in `docker compose`.** The apps push OTLP to an
-**OpenTelemetry Collector**, which fans each signal out to its backend; **Grafana**
-is the single UI over all three:
+**The full backend stack ships in `docker compose`, behind an opt-in profile** so
+it never weighs on the core services. The apps push OTLP to an **OpenTelemetry
+Collector**, which fans each signal out to its backend; **Grafana** is the single
+UI over all three:
 
 ```
  Auth / Wallet / TopUp ──OTLP──► OTel Collector ──► Jaeger      (traces)
@@ -220,10 +221,24 @@ is the single UI over all three:
                                         Grafana queries all three (one UI)
 ```
 
-The apps only know the Collector (`OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`);
-swapping or adding a backend is Collector config, not a code change.
+The apps only know the Collector; swapping or adding a backend is Collector
+config, not a code change.
 
-**View it** after `docker compose up -d` + running the Try-it flow:
+**Start it (opt-in — the core stack runs lean without it):**
+
+```bash
+# core only (default) — observability backends do NOT start
+docker compose up -d
+
+# core + the observability stack (needs ~1-2GB more memory)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+  docker compose --profile observability up -d
+```
+
+Without `OTEL_EXPORTER_OTLP_ENDPOINT` set, the apps are instrumented but export
+nowhere, so the core services never wait on or are slowed by these backends.
+
+**View it** (with the profile up) after running the Try-it flow:
 
 | UI | URL | Shows |
 |---|---|---|
