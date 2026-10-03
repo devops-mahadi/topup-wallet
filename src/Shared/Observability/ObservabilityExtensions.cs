@@ -35,6 +35,13 @@ public static class ObservabilityExtensions
         var otlpEndpoint = config["OTEL_EXPORTER_OTLP_ENDPOINT"]
                            ?? Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
 
+        // Dev toggle: OTEL_CONSOLE=true prints traces + metrics + logs straight to
+        // stdout (container logs) so you can SEE telemetry locally with no backend.
+        // Noisy — dev only, off by default.
+        var console = string.Equals(
+            config["OTEL_CONSOLE"] ?? Environment.GetEnvironmentVariable("OTEL_CONSOLE"),
+            "true", StringComparison.OrdinalIgnoreCase);
+
         var resource = ResourceBuilder.CreateDefault()
             .AddService(serviceName: serviceName,
                 serviceVersion: typeof(ObservabilityExtensions).Assembly.GetName().Version?.ToString() ?? "1.0.0");
@@ -47,6 +54,7 @@ public static class ObservabilityExtensions
                  .AddHttpClientInstrumentation();  // outgoing HTTP spans (e.g. operator gateway)
                 configureTracing?.Invoke(t);       // service-specific: EF, Redis, MassTransit
                 if (otlpEndpoint is not null) t.AddOtlpExporter();
+                if (console) t.AddConsoleExporter();
             })
             .WithMetrics(m =>
             {
@@ -55,6 +63,7 @@ public static class ObservabilityExtensions
                  .AddRuntimeInstrumentation();      // GC, thread pool, etc.
                 configureMetrics?.Invoke(m);
                 if (otlpEndpoint is not null) m.AddOtlpExporter();
+                if (console) m.AddConsoleExporter();
             });
 
         // Structured logs through the same pipeline, with trace/span ids attached
@@ -65,6 +74,7 @@ public static class ObservabilityExtensions
             o.IncludeScopes = true;
             o.IncludeFormattedMessage = true;
             if (otlpEndpoint is not null) o.AddOtlpExporter();
+            if (console) o.AddConsoleExporter();
         }));
 
         return services;

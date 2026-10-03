@@ -223,9 +223,20 @@ the external gateway. Custom business metrics (`funding.deposits.created`,
   Any OTLP backend works the same way: Grafana Tempo/Loki/Prometheus, Datadog,
   Honeycomb, or an OpenTelemetry Collector fanning out to several.
 
-- **Nothing set = instrumented but silent.** With no `OTEL_EXPORTER_OTLP_ENDPOINT`,
-  telemetry is generated but not exported anywhere (no logs, no endpoint) — the
-  instrumentation simply costs nothing until a backend is attached.
+- **See it with no infra (dev toggle).** Set `OTEL_CONSOLE=true` to print traces,
+  metrics and logs straight to the container logs — no backend needed:
+
+  ```bash
+  OTEL_CONSOLE=true docker compose up -d --build
+  docker compose logs -f wallet-api      # watch spans/metrics/logs scroll
+  ```
+
+  You'll see e.g. a `POST /accounts` server span and its `WalletDb` EF span sharing
+  one `TraceId`. Noisy — dev only, off by default.
+
+- **Nothing set = instrumented but silent.** With neither `OTEL_EXPORTER_OTLP_ENDPOINT`
+  nor `OTEL_CONSOLE`, telemetry is generated but not exported anywhere — the
+  instrumentation simply costs nothing until a backend (or the console toggle) is on.
 
 OTLP is a **push** model (the app pushes to the collector); you don't poll the
 app for telemetry. Metrics *can* also be exposed for Prometheus scraping by adding

@@ -93,6 +93,8 @@ services:
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
+      OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -117,6 +119,8 @@ services:
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
+      OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -142,6 +146,8 @@ services:
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
+      OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
 
 volumes:
   sqldata:
