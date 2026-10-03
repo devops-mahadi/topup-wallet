@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using MassTransit;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +14,7 @@ using Wallet.Api.Audit;
 using Wallet.Api.Consumers;
 using Wallet.Api.Data;
 using Wallet.Api.Domain;
+using Wallet.Api.Funding;
 using Wallet.Api.Services;
 
 // Tell the Mongo driver how to store Guids. Modern driver requires this to be
@@ -26,13 +28,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 
-// Register the DbContext against SQL Server (Azure SQL Edge in Docker).
+// Register the DbContext against SQL Server (SQL Server 2022 in Docker).
 // Connection string comes from config (appsettings) — never hardcoded here.
 builder.Services.AddDbContext<WalletDbContext>(opt =>
     opt.UseSqlServer(builder.Configuration.GetConnectionString("WalletDb")));
 
 // Mongo audit log — Singleton (MongoClient is thread-safe + pools connections).
 builder.Services.AddSingleton<IAuditLog, AuditLog>();
+
+// Payment gateway (money-in boundary). Simulator for dev; a real PSP impl
+// (Stripe/Adyen/SSLCommerz) swaps in here without touching the endpoints.
+builder.Services.AddSingleton<SimulatedPaymentGateway>();
+builder.Services.AddSingleton<IPaymentGateway>(sp => sp.GetRequiredService<SimulatedPaymentGateway>());
 
 // Scoped: one WalletService (and its DbContext) per HTTP request / message.
 builder.Services.AddScoped<WalletService>();
@@ -196,6 +203,102 @@ app.MapGet("/accounts/{id:guid}/audit", async (Guid id, IAuditLog audit, WalletD
     return error ?? Results.Ok(await audit.ForAccountAsync(id));
 }).RequireAuthorization();
 
+// ====================================================================
+// FUNDING (money IN): fund a wallet from a card via an external PSP.
+// ====================================================================
+
+// --- Create a deposit --- (auth'd; owner only)
+// The browser has already exchanged the card for a payment TOKEN with the PSP
+// (PAN never hits us). We create the charge at the PSP and record a PENDING
+// deposit. We do NOT credit yet — the webhook is the source of truth.
+app.MapPost("/accounts/{id:guid}/deposits",
+    async (Guid id, DepositRequest req, WalletDbContext db, IPaymentGateway psp, ClaimsPrincipal user) =>
+{
+    var (acc, error) = await LoadOwned(db, id, user);
+    if (error is not null) return error;
+    if (req.Amount <= 0) return Results.BadRequest(new { error = "amount_must_be_positive" });
+
+    var intent = await psp.CreateDepositAsync(req.PaymentToken, req.Amount, acc!.Currency);
+
+    var deposit = new Deposit
+    {
+        AccountId = acc.Id,
+        UserId = acc.UserId,
+        Amount = req.Amount,
+        Currency = acc.Currency,
+        ProviderIntentId = intent.ProviderIntentId,
+        State = intent.Status == DepositStatus.Declined ? DepositState.Declined : DepositState.Pending
+    };
+    db.Deposits.Add(deposit);
+    await db.SaveChangesAsync();
+
+    // Map PSP status to a client response. Succeeded here means "charge accepted";
+    // the wallet is credited only when the confirming webhook arrives.
+    return Results.Ok(new
+    {
+        depositId = deposit.Id,
+        status = intent.Status.ToString(),
+        clientSecret = intent.ClientSecret,   // for 3DS: browser completes with this
+        declineReason = intent.DeclineReason
+    });
+}).RequireAuthorization();
+
+// --- PSP webhook --- (OPEN endpoint — authenticated by SIGNATURE, not a JWT)
+// The PSP calls this when a payment settles. We verify the HMAC signature, then
+// credit the wallet IDEMPOTENTLY using the PSP event id as the key — the PSP
+// retries webhooks, so this must be safe to receive many times.
+app.MapPost("/webhooks/payment",
+    async (HttpRequest http, WalletDbContext db, WalletService wallet, IPaymentGateway psp) =>
+{
+    using var reader = new StreamReader(http.Body);
+    var rawBody = await reader.ReadToEndAsync();
+    var signature = http.Headers["X-Signature"].ToString();
+
+    var evt = psp.VerifyAndParseWebhook(rawBody, signature);
+    if (evt is null) return Results.Unauthorized();   // bad/missing signature → reject
+
+    var deposit = await db.Deposits.FirstOrDefaultAsync(d => d.ProviderIntentId == evt.ProviderIntentId);
+    if (deposit is null) return Results.NotFound(new { error = "unknown_intent" });
+
+    if (evt.Status == DepositStatus.Succeeded && !deposit.Credited)
+    {
+        // Credit via the existing idempotent money core, keyed by the PSP EVENT id.
+        // A replayed webhook hits the same key → CreditAsync returns the stored
+        // result, so the wallet is credited exactly once.
+        await wallet.CreditAsync(new MoneyRequest(deposit.AccountId, deposit.Amount, $"psp:{evt.EventId}"));
+        deposit.State = DepositState.Succeeded;
+        deposit.Credited = true;
+    }
+    else if (evt.Status == DepositStatus.Declined)
+    {
+        deposit.State = DepositState.Declined;
+    }
+    deposit.UpdatedAtUtc = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { received = true });
+});
+
+// --- DEMO ONLY: return a correctly-SIGNED webhook payload for a deposit, so you
+// can POST it to /webhooks/payment yourself and exercise the real verification +
+// crediting path without a PSP calling back. Not for production.
+app.MapPost("/accounts/{accountId:guid}/deposits/{depositId:guid}/webhook-payload",
+    async (Guid depositId, string? status, WalletDbContext db, SimulatedPaymentGateway sim) =>
+{
+    var deposit = await db.Deposits.FindAsync(depositId);
+    if (deposit is null) return Results.NotFound();
+
+    var body = JsonSerializer.Serialize(new
+    {
+        eventId = $"evt_{Guid.CreateVersion7():N}"[..16],
+        providerIntentId = deposit.ProviderIntentId,
+        status = status ?? "Succeeded"
+    });
+    // Hand back the body + a valid signature. POST these to /webhooks/payment:
+    //   curl -X POST .../webhooks/payment -H "X-Signature: <signature>" -d '<body>'
+    return Results.Ok(new { body, signature = sim.Sign(body) });
+}).RequireAuthorization();
+
 app.Run();
 
 // Translate domain outcomes into clean HTTP responses.
@@ -213,3 +316,6 @@ static async Task<IResult> Handle(Func<Task<MoneyResult>> action)
 
 record CreateAccount(string OwnerName, string Currency, decimal Opening);
 record MoneyOp(decimal Amount, string IdempotencyKey);
+// paymentToken = a PSP token the browser got by sending the card straight to the
+// PSP; the raw card number never reaches this API.
+record DepositRequest(string PaymentToken, decimal Amount);

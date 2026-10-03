@@ -1,18 +1,26 @@
 # TopUpWallet infra — SQL Server, RabbitMQ, Redis, MongoDB.
-# arm64 (Apple Silicon): Azure SQL Edge is the ARM-native SQL Server.
+# SQL Server 2022 runs natively on arm64 (Apple Silicon).
 services:
 
   sqlserver:
-    # Azure SQL Edge = ARM-native, speaks the SQL Server protocol (T-SQL, port 1433).
-    image: mcr.microsoft.com/azure-sql-edge:latest
+    # Full SQL Server 2022 — now has native arm64 support, so it runs directly on
+    # Apple Silicon (we dropped Azure SQL Edge, whose latest arm64 builds crash on
+    # the master-DB upgrade step). Same T-SQL, port 1433.
+    image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: tw-sqlserver
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "TopUpWallet!2026"   # dev only — real secrets go in a vault
     ports:
       - "1433:1433"
-    volumes:
-      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "TopUpWallet!2026", "-C", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s # Gives MSSQL time to boot before failures count
+    #volumes:
+    #  - sqldata:/var/opt/mssql
 
   rabbitmq:
     # management image = broker + web UI on 15672 (guest/guest)
@@ -44,10 +52,19 @@ services:
   mongo:
     image: mongo:7
     container_name: tw-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo-user
+      MONGO_INITDB_ROOT_PASSWORD: "MyStrong!Password123"
     ports:
       - "27017:27017"
-    volumes:
-      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--username", "mongo-user", "--password", "MyStrong!Password123", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s # Gives MongoDB time to pre-allocate files on first boot
+    #volumes:
+    #  - mongodata:/data/db
 
   # ---- Application services (built from source) ----
 
@@ -68,7 +85,7 @@ services:
       # names (not localhost — localhost inside a container is the container itself).
       # The __ syntax maps to the nested config key ConnectionStrings:Name.
       ConnectionStrings__WalletDb: "Server=sqlserver,1433;Database=WalletDb;User Id=sa;Password=TopUpWallet!2026;TrustServerCertificate=True;Encrypt=True"
-      ConnectionStrings__Mongo: "mongodb://mongo:27017"
+      ConnectionStrings__Mongo: "mongodb://mongo-user:MyStrong!Password123@mongo:27017/?authSource=admin"
       ConnectionStrings__RabbitMq: "rabbitmq"
       # JWT signing key from the environment (shared across all 3 services). The
       # :- default keeps the demo runnable; set JWT_SIGNING_KEY (or a vault) in real envs.
@@ -77,9 +94,9 @@ services:
       rabbitmq:
         condition: service_healthy
       sqlserver:
-        condition: service_started
+        condition: service_healthy
       mongo:
-        condition: service_started
+        condition: service_healthy
 
   topup-api:
     build:
@@ -98,6 +115,8 @@ services:
       rabbitmq:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      sqlserver:
         condition: service_healthy
 
   # Issues JWT access + refresh tokens. Stateless (no DB/cache) — tokens are

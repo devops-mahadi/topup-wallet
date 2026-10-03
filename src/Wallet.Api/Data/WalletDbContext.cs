@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Wallet.Api.Domain;
+using Wallet.Api.Funding;
 
 namespace Wallet.Api.Data;
 
@@ -9,6 +10,7 @@ public class WalletDbContext : DbContext
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<WalletTransaction> Transactions => Set<WalletTransaction>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+    public DbSet<Deposit> Deposits => Set<Deposit>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -42,6 +44,18 @@ public class WalletDbContext : DbContext
             e.HasKey(i => i.Key);                       // key is the PK → DB enforces uniqueness
             e.Property(i => i.Key).HasMaxLength(100);
             e.Property(i => i.ResultingBalance).HasColumnType("decimal(19,4)");
+        });
+
+        b.Entity<Deposit>(e =>
+        {
+            e.HasKey(d => d.Id);
+            e.Property(d => d.Amount).HasColumnType("decimal(19,4)");
+            e.Property(d => d.Currency).HasMaxLength(3);
+            e.Property(d => d.UserId).HasMaxLength(100);
+            e.Property(d => d.ProviderIntentId).HasMaxLength(100);
+            e.Property(d => d.State).HasConversion<string>();
+            // Look up a deposit by the PSP intent id when its webhook arrives.
+            e.HasIndex(d => d.ProviderIntentId).IsUnique();
         });
     }
 }

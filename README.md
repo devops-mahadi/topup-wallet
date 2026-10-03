@@ -100,6 +100,12 @@ the internal saga path.
 - **Append-only audit** — immutable event log in MongoDB, separate store.
 - **Resilience** — Polly retry / timeout / circuit-breaker on the one
   uncontrolled external call; open circuit fails fast and the saga compensates.
+- **Card funding via a payment gateway** — money *in*: the browser tokenizes the
+  card with the PSP (the PAN never hits the API), the wallet is credited only on
+  the PSP's **signed webhook** (not the sync response), and the credit is
+  idempotent on the PSP event id. Forged/unsigned webhooks are rejected. Decline
+  and 3-D Secure are modelled branches. `IPaymentGateway` + a simulator, swappable
+  for a real PSP (Stripe/Adyen/SSLCommerz).
 
 Each of these is documented with the *why* behind it, tied to the exact file.
 
