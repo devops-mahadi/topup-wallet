@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Wallet.Api.Audit;
 using Wallet.Api.Data;
 using Wallet.Api.Domain;
 
@@ -15,7 +16,12 @@ namespace Wallet.Api.Services;
 public class WalletService
 {
     private readonly WalletDbContext _db;
-    public WalletService(WalletDbContext db) => _db = db;
+    private readonly AuditLog _audit;
+    public WalletService(WalletDbContext db, AuditLog audit)
+    {
+        _db = db;
+        _audit = audit;
+    }
 
     public Task<MoneyResult> DebitAsync(MoneyRequest req, CancellationToken ct = default)
         => MoveAsync(req, TransactionType.Debit, ct);
@@ -86,6 +92,22 @@ public class WalletService
                 // If another txn changed the account first → DbUpdateConcurrencyException.
                 await _db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
+
+                // Audit AFTER commit. The money is already durably committed in SQL;
+                // the audit log is a separate append-only trail in Mongo. We don't put
+                // it inside the DB transaction because it's a different store — instead
+                // it's best-effort post-commit. (Production: for guaranteed audit you'd
+                // use the OUTBOX pattern — write an audit intent in the same SQL txn,
+                // publish async — so you never commit-but-fail-to-audit.)
+                await _audit.WriteAsync(new AuditEvent
+                {
+                    EventType = type.ToString(),       // "Debit" / "Credit"
+                    AccountId = account.Id,
+                    TransactionId = txn.Id,
+                    Amount = req.Amount,
+                    BalanceAfter = account.Balance,
+                    IdempotencyKey = req.IdempotencyKey
+                }, ct);
 
                 return new MoneyResult(txn.Id, account.Balance, WasReplay: false);
             }

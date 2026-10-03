@@ -1,7 +1,15 @@
 using Microsoft.EntityFrameworkCore;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Serializers;
+using Wallet.Api.Audit;
 using Wallet.Api.Data;
 using Wallet.Api.Domain;
 using Wallet.Api.Services;
+
+// Tell the Mongo driver how to store Guids. Modern driver requires this to be
+// explicit (no silent default) — Standard = the current, portable representation.
+BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +19,9 @@ builder.Services.AddOpenApi();
 // Connection string comes from config (appsettings) — never hardcoded here.
 builder.Services.AddDbContext<WalletDbContext>(opt =>
     opt.UseSqlServer(builder.Configuration.GetConnectionString("WalletDb")));
+
+// Mongo audit log — Singleton (MongoClient is thread-safe + pools connections).
+builder.Services.AddSingleton<AuditLog>();
 
 // Scoped: one WalletService (and its DbContext) per HTTP request.
 builder.Services.AddScoped<WalletService>();
@@ -57,12 +68,16 @@ app.MapPost("/accounts/{id:guid}/debit", async (Guid id, MoneyOp op, WalletServi
 app.MapPost("/accounts/{id:guid}/credit", async (Guid id, MoneyOp op, WalletService svc) =>
     await Handle(() => svc.CreditAsync(new MoneyRequest(id, op.Amount, op.IdempotencyKey))));
 
-// --- Ledger (immutable transaction history) ---
+// --- Ledger (immutable transaction history, from SQL Server) ---
 app.MapGet("/accounts/{id:guid}/transactions", async (Guid id, WalletDbContext db) =>
     Results.Ok(await db.Transactions.AsNoTracking()
         .Where(t => t.AccountId == id)
         .OrderByDescending(t => t.CreatedAtUtc)
         .ToListAsync()));
+
+// --- Audit trail (append-only event log, from MongoDB) ---
+app.MapGet("/accounts/{id:guid}/audit", async (Guid id, AuditLog audit) =>
+    Results.Ok(await audit.ForAccountAsync(id)));
 
 app.Run();
 
