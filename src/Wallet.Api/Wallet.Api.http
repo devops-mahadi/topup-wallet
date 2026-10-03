@@ -98,6 +98,81 @@ Authorization: Bearer {{token}}
 GET {{host}}/accounts/{{accountId}}/audit
 Authorization: Bearer {{token}}
 
+### ================= FUNDING (money IN via payment gateway) =================
+### Fund the wallet from a card. The browser tokenizes the card with the PSP;
+### here we pass a demo token. Money is credited on the SIGNED WEBHOOK, not here.
+###   tok_ok      -> Succeeded (webhook will credit)
+###   tok_decline -> Declined
+###   tok_3ds     -> RequiresAction (3-D Secure) + clientSecret
+
+###
+# @name createDeposit
+### Create a $100 deposit. Response: depositId + status. Deposit is PENDING —
+### balance is NOT credited yet.
+POST {{host}}/accounts/{{accountId}}/deposits
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "paymentToken": "tok_ok", "amount": 100 }
+
+###
+@depositId = {{createDeposit.response.body.$.depositId}}
+
+### Balance still unchanged (webhook not received yet)
+GET {{host}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
+
+###
+# @name webhookPayload
+### DEMO helper: returns a correctly-SIGNED webhook body + signature for this
+### deposit, so you can fire the webhook below without a real PSP calling back.
+POST {{host}}/accounts/{{accountId}}/deposits/{{depositId}}/webhook-payload
+Authorization: Bearer {{token}}
+
+###
+@webhookBody = {{webhookPayload.response.body.$.body}}
+@webhookSig  = {{webhookPayload.response.body.$.signature}}
+
+### PSP WEBHOOK (open endpoint — authenticated by HMAC signature, not a JWT).
+### Valid signature -> wallet credited. Balance becomes 100.
+POST {{host}}/webhooks/payment
+X-Signature: {{webhookSig}}
+Content-Type: {{contentType}}
+
+{{webhookBody}}
+
+### Balance now 100
+GET {{host}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
+
+### REPLAY the same webhook (PSPs retry) -> idempotent, balance STILL 100.
+POST {{host}}/webhooks/payment
+X-Signature: {{webhookSig}}
+Content-Type: {{contentType}}
+
+{{webhookBody}}
+
+### FORGED webhook (bad signature) -> 401, no credit.
+POST {{host}}/webhooks/payment
+X-Signature: deadbeefbadsignature
+Content-Type: {{contentType}}
+
+{{webhookBody}}
+
+### Declined card -> status Declined, no deposit to credit.
+POST {{host}}/accounts/{{accountId}}/deposits
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "paymentToken": "tok_decline", "amount": 50 }
+
+### 3-D Secure card -> RequiresAction + clientSecret (browser completes the challenge).
+POST {{host}}/accounts/{{accountId}}/deposits
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "paymentToken": "tok_3ds", "amount": 50 }
+
 ### --- IDOR check: a DIFFERENT user cannot touch alice's account ---
 # @name loginBob
 POST {{auth}}/auth/login
