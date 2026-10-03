@@ -16,8 +16,8 @@ namespace Wallet.Api.Services;
 public class WalletService
 {
     private readonly WalletDbContext _db;
-    private readonly AuditLog _audit;
-    public WalletService(WalletDbContext db, AuditLog audit)
+    private readonly IAuditLog _audit;
+    public WalletService(WalletDbContext db, IAuditLog audit)
     {
         _db = db;
         _audit = audit;

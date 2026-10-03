@@ -7,7 +7,7 @@ namespace Wallet.Api.Audit;
 /// Registered as a singleton: the Mongo client is thread-safe and manages its own
 /// connection pool, so one instance is shared across the app.
 /// </summary>
-public class AuditLog
+public class AuditLog : IAuditLog
 {
     private readonly IMongoCollection<AuditEvent> _events;
 

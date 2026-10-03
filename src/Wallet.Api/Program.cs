@@ -23,7 +23,7 @@ builder.Services.AddDbContext<WalletDbContext>(opt =>
     opt.UseSqlServer(builder.Configuration.GetConnectionString("WalletDb")));
 
 // Mongo audit log — Singleton (MongoClient is thread-safe + pools connections).
-builder.Services.AddSingleton<AuditLog>();
+builder.Services.AddSingleton<IAuditLog, AuditLog>();
 
 // Scoped: one WalletService (and its DbContext) per HTTP request / message.
 builder.Services.AddScoped<WalletService>();
@@ -104,7 +104,7 @@ app.MapGet("/accounts/{id:guid}/transactions", async (Guid id, WalletDbContext d
         .ToListAsync()));
 
 // --- Audit trail (append-only event log, from MongoDB) ---
-app.MapGet("/accounts/{id:guid}/audit", async (Guid id, AuditLog audit) =>
+app.MapGet("/accounts/{id:guid}/audit", async (Guid id, IAuditLog audit) =>
     Results.Ok(await audit.ForAccountAsync(id)));
 
 app.Run();
