@@ -35,7 +35,10 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "wallet" }
 // --- Create an account (seed/testing) ---
 app.MapPost("/accounts", async (CreateAccount req, WalletDbContext db) =>
 {
-    var acc = new Account { Id = Guid.NewGuid(), OwnerName = req.OwnerName, Currency = req.Currency, Balance = req.Opening };
+    // CreateVersion7() = time-ordered UUIDv7: generated app-side (before the DB round-trip,
+    // so the id is known immediately) AND sequential, keeping index locality — avoids the
+    // page-split fragmentation that random v4 Guids (Guid.NewGuid) cause.
+    var acc = new Account { Id = Guid.CreateVersion7(), OwnerName = req.OwnerName, Currency = req.Currency, Balance = req.Opening };
     db.Accounts.Add(acc);
     await db.SaveChangesAsync();
     return Results.Created($"/accounts/{acc.Id}", new { acc.Id, acc.OwnerName, acc.Currency, acc.Balance });

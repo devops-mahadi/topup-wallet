@@ -61,7 +61,7 @@ public class WalletService
 
                 var txn = new WalletTransaction
                 {
-                    Id = Guid.NewGuid(),
+                    Id = Guid.CreateVersion7(),   // time-ordered UUIDv7 — sequential, index-friendly
                     AccountId = account.Id,
                     Type = type,
                     Amount = req.Amount,

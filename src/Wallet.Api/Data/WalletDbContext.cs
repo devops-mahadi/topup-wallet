@@ -6,7 +6,6 @@ namespace Wallet.Api.Data;
 public class WalletDbContext : DbContext
 {
     public WalletDbContext(DbContextOptions<WalletDbContext> options) : base(options) { }
-
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<WalletTransaction> Transactions => Set<WalletTransaction>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
