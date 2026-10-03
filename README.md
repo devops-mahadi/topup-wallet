@@ -208,39 +208,34 @@ so a single top-up is one distributed trace spanning HTTP → RabbitMQ → Walle
 the external gateway. Custom business metrics (`funding.deposits.created`,
 `funding.deposits.credited`, `funding.webhook.rejected`) are emitted too.
 
-**No backend is bundled.** How you view the data:
+**The full backend stack ships in `docker compose`.** The apps push OTLP to an
+**OpenTelemetry Collector**, which fans each signal out to its backend; **Grafana**
+is the single UI over all three:
 
-- **Export to a backend (the real way).** Point the services at any OTLP
-  collector/backend and browse in its UI — nothing in the app changes:
+```
+ Auth / Wallet / TopUp ──OTLP──► OTel Collector ──► Jaeger      (traces)
+                                               ──► Prometheus  (metrics)
+                                               ──► Loki        (logs)
+                                                      ▲
+                                        Grafana queries all three (one UI)
+```
 
-  ```bash
-  # example: run Jaeger and send traces to it
-  docker run -d --name jaeger -p 16686:16686 -p 4317:4317 jaegertracing/all-in-one
-  OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317 docker compose up -d
-  # open http://localhost:16686 and follow a top-up across all services
-  ```
+The apps only know the Collector (`OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`);
+swapping or adding a backend is Collector config, not a code change.
 
-  Any OTLP backend works the same way: Grafana Tempo/Loki/Prometheus, Datadog,
-  Honeycomb, or an OpenTelemetry Collector fanning out to several.
+**View it** after `docker compose up -d` + running the Try-it flow:
 
-- **See it with no infra (dev toggle).** Set `OTEL_CONSOLE=true` to print traces,
-  metrics and logs straight to the container logs — no backend needed:
+| UI | URL | Shows |
+|---|---|---|
+| **Jaeger** | http://localhost:16686 | pick `topup-api` → a top-up trace spanning HTTP → RabbitMQ → Wallet → SQL/Redis |
+| **Grafana** | http://localhost:3000 | dashboards/queries over Prometheus (metrics), Loki (logs), Jaeger (traces); anon admin, no login |
+| **Prometheus** | http://localhost:9090 | raw metric queries (e.g. `funding_deposits_created_total`) |
 
-  ```bash
-  OTEL_CONSOLE=true docker compose up -d --build
-  docker compose logs -f wallet-api      # watch spans/metrics/logs scroll
-  ```
+**Dev toggle, no backend:** set `OTEL_CONSOLE=true` to print traces/metrics/logs
+straight to the container logs instead — `docker compose logs -f wallet-api`.
 
-  You'll see e.g. a `POST /accounts` server span and its `WalletDb` EF span sharing
-  one `TraceId`. Noisy — dev only, off by default.
-
-- **Nothing set = instrumented but silent.** With neither `OTEL_EXPORTER_OTLP_ENDPOINT`
-  nor `OTEL_CONSOLE`, telemetry is generated but not exported anywhere — the
-  instrumentation simply costs nothing until a backend (or the console toggle) is on.
-
-OTLP is a **push** model (the app pushes to the collector); you don't poll the
-app for telemetry. Metrics *can* also be exposed for Prometheus scraping by adding
-that exporter, if a pull model is preferred.
+OTLP is a **push** model (the app pushes to the Collector; you don't poll the app).
+The Collector exposes metrics for Prometheus to **scrape** (pull) on its side.
 
 ---
 

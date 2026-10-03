@@ -1,0 +1,46 @@
+# OpenTelemetry Collector: one OTLP endpoint for the apps, fanned out per signal.
+#   traces  -> Jaeger
+#   metrics -> Prometheus (scrapes the collector's /metrics)
+#   logs    -> Loki (via OTLP)
+# The apps only know this collector; swapping any backend is a change HERE, not in code.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317   # apps push OTLP/gRPC here
+      http:
+        endpoint: 0.0.0.0:4318   # or OTLP/HTTP here
+
+processors:
+  batch: {}                      # batch exports for efficiency
+
+exporters:
+  # Traces -> Jaeger (Jaeger accepts OTLP directly on 4317).
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Metrics -> exposed for Prometheus to SCRAPE (pull model) on :8889.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  # Logs -> Loki via its OTLP endpoint.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]

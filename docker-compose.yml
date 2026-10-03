@@ -92,7 +92,7 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
@@ -118,7 +118,7 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
     depends_on:
@@ -145,9 +145,68 @@ services:
       Jwt__SigningKey: "${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-32bytes-minimum-abc123}"
       # OpenTelemetry: point this at any OTLP backend/collector to export traces+
       # metrics+logs (empty = instrumented but not exporting). e.g. http://otel-collector:4317
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
       # Dev toggle: set OTEL_CONSOLE=true to print traces+metrics+logs to container logs.
       OTEL_CONSOLE: "${OTEL_CONSOLE:-false}"
+
+  # ---- Observability backends ----
+  # Apps push OTLP to the collector; the collector fans out per signal:
+  #   traces -> Jaeger, metrics -> Prometheus (scrape), logs -> Loki.
+  # Grafana is the single UI querying all three. None of this changes app code.
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: tw-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (apps -> collector)
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - jaeger
+      - loki
+
+  jaeger:
+    # all-in-one: receives OTLP, stores traces, serves the UI.
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: tw-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI (browser)
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: tw-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"     # Prometheus UI
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: tw-loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: tw-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # dev: no login
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"     # Grafana UI (browser)
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
 
 volumes:
   sqldata:
