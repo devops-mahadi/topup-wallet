@@ -5,4 +5,7 @@
     <Project Path="src/TopUp.Api/TopUp.Api.csproj" />
     <Project Path="src/Wallet.Api/Wallet.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Wallet.Tests/Wallet.Tests.csproj" />
+  </Folder>
 </Solution>

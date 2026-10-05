@@ -41,13 +41,30 @@ public class WalletService
         if (existing is not null)
             return new MoneyResult(existing.TransactionId, existing.ResultingBalance, WasReplay: true);
 
+        // When we're running inside a MassTransit consumer, the transactional-outbox
+        // filter has ALREADY opened a transaction on this (scoped) DbContext and will
+        // commit it — together with the OutboxMessage row for whatever the consumer
+        // publishes. In that case we must NOT open or commit our own: we enlist in
+        // theirs, so the balance update, the ledger row, the idempotency record and
+        // the published event all commit atomically or not at all. That is the whole
+        // point of the outbox — it closes the commit-then-publish gap where money
+        // moves but the event announcing it is lost.
+        //
+        // On the HTTP path there is no ambient transaction, so we own one as before.
+        var ambient = _db.Database.CurrentTransaction is not null;
+
         // Retry loop: optimistic concurrency can fail if another txn updates the
         // same account first. We reload + retry a few times rather than overdraw.
-        const int maxAttempts = 3;
+        // Under an ambient transaction we can't roll back just our own work, so the
+        // retry is the consumer's job: MassTransit redelivers the message and the
+        // idempotency key makes the replay safe.
+        var maxAttempts = ambient ? 1 : 3;
         for (var attempt = 1; ; attempt++)
         {
             // One DB transaction wraps the whole money move → atomicity.
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            await using var tx = ambient
+                ? null
+                : await _db.Database.BeginTransactionAsync(ct);
             try
             {
                 var account = await _db.Accounts.FirstOrDefaultAsync(a => a.Id == req.AccountId, ct)
@@ -91,7 +108,7 @@ public class WalletService
                 // SaveChanges issues the UPDATE with "WHERE RowVersion = @original".
                 // If another txn changed the account first → DbUpdateConcurrencyException.
                 await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
+                if (tx is not null) await tx.CommitAsync(ct);
 
                 // Audit AFTER commit. The money is already durably committed in SQL;
                 // the audit log is a separate append-only trail in Mongo. We don't put
@@ -115,6 +132,10 @@ public class WalletService
             {
                 // Another transaction won the race on this account. Roll back, reset the
                 // tracked entities, and retry with a fresh read of the balance.
+                // Under an ambient transaction we let it propagate instead: rolling back
+                // the outbox filter's transaction here would also discard the event it
+                // is about to publish, so we leave the unwind to MassTransit.
+                if (tx is null) throw;
                 await tx.RollbackAsync(ct);
                 if (attempt >= maxAttempts) throw;
                 foreach (var entry in _db.ChangeTracker.Entries().ToList())
@@ -127,6 +148,13 @@ public class WalletService
                 // request with the same key committed first. Can't await in a catch filter,
                 // so we check here: if the key now exists, return the stored result
                 // (still exactly-once); otherwise it's a real failure → rethrow.
+                //
+                // Under an ambient transaction we can't recover: the failed SaveChanges
+                // has poisoned the outbox filter's transaction, and reading through it
+                // would be reading from a doomed transaction. Rethrow and let the
+                // consumer's redelivery hit the fast-path idempotency check at the top,
+                // which returns the stored result on a clean transaction.
+                if (tx is null) throw;
                 await tx.RollbackAsync(ct);
                 var rec = await _db.IdempotencyRecords.AsNoTracking()
                     .FirstOrDefaultAsync(i => i.Key == req.IdempotencyKey, ct);
@@ -136,7 +164,9 @@ public class WalletService
             }
             catch
             {
-                await tx.RollbackAsync(ct);
+                // Ambient: the outbox filter owns the transaction and unwinds it when
+                // the consumer faults, so we only roll back one we opened ourselves.
+                if (tx is not null) await tx.RollbackAsync(ct);
                 throw;
             }
         }

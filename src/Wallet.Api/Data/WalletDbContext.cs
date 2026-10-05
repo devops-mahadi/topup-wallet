@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Wallet.Api.Domain;
 using Wallet.Api.Funding;
@@ -14,6 +15,10 @@ public class WalletDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder b)
     {
+        // MassTransit transactional outbox/inbox tables, in THIS DB so an event
+        // publish commits in the same transaction as the business change.
+        b.AddTransactionalOutboxEntities();
+
         b.Entity<Account>(e =>
         {
             e.HasKey(a => a.Id);

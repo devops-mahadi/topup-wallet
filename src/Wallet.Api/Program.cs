@@ -102,6 +102,18 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<DebitWalletConsumer>();
     x.AddConsumer<RefundWalletConsumer>();
 
+    // Transactional outbox stored in WalletDbContext (same SQL DB as the money).
+    // Publishing an event now commits in the SAME transaction as the DB change, so
+    // we never commit-but-fail-to-publish. MassTransit's delivery service relays the
+    // outbox rows to the broker; the inbox dedups incoming messages (idempotent
+    // consumers). Closes the "best-effort post-commit publish" gap.
+    x.AddEntityFrameworkOutbox<WalletDbContext>(o =>
+    {
+        o.UseSqlServer();
+        o.UseBusOutbox();                       // outgoing publishes go through the outbox
+        o.QueryDelay = TimeSpan.FromSeconds(1); // how often the relay sweeps unpublished rows
+    });
+
     x.UsingRabbitMq((ctx, cfg) =>
     {
         var rabbit = builder.Configuration.GetConnectionString("RabbitMq") ?? "localhost";
@@ -110,12 +122,20 @@ builder.Services.AddMassTransit(x =>
         // Bind the consumers to the exact queue names the saga sends to.
         cfg.ReceiveEndpoint("wallet-debit", e =>
         {
+            // AddEntityFrameworkOutbox (above) only registers the DbContext, the
+            // entities and the relay. The filter that actually routes a consumer's
+            // Publish into OutboxMessage — and opens the transaction the consumer
+            // then shares — is per-endpoint, so it has to be added here too.
+            // Without it, ctx.Publish goes straight to the broker and the outbox
+            // tables stay empty.
+            e.UseEntityFrameworkOutbox<WalletDbContext>(ctx);
             e.ConfigureConsumer<DebitWalletConsumer>(ctx);
             // Retry transient faults (deadlocks, broker blips) before dead-lettering.
             e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromMilliseconds(500)));
         });
         cfg.ReceiveEndpoint("wallet-refund", e =>
         {
+            e.UseEntityFrameworkOutbox<WalletDbContext>(ctx);
             e.ConfigureConsumer<RefundWalletConsumer>(ctx);
             e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromMilliseconds(500)));
         });

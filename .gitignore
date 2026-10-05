@@ -486,3 +486,9 @@ INTERVIEW-NOTES.md
 
 # Local-only build roadmap — not published
 BUILD-PLAN.md
+
+# Claude Code — local agent/tooling config. Never committed or pushed.
+.claude/
+.claude.json
+CLAUDE.md
+CLAUDE.local.md
