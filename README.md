@@ -1,11 +1,13 @@
 # TopUp Wallet
 
-A small but production-shaped **mobile airtime top-up** service, built as two
-microservices on the exact stack a fintech backend role asks for: **C# / ASP.NET
-Core, SQL Server, RabbitMQ, Redis, MongoDB, Docker** — with the fintech
-engineering that actually matters (idempotent money movement, a cross-service
-saga with compensation, an append-only audit ledger, and resilience on the
-external operator call).
+A small but production-shaped **mobile airtime top-up** service, built as a set of
+microservices on a modern fintech backend stack: **C# / ASP.NET Core, SQL Server,
+RabbitMQ (MassTransit), Redis, MongoDB, Docker**, with **OpenTelemetry**
+observability (traces, metrics, structured logs) exported via an OTel Collector to
+Jaeger / Prometheus / Loki / Grafana — and the fintech engineering that actually
+matters (idempotent money movement, a cross-service saga with compensation, a
+transactional outbox, an append-only audit ledger, and resilience on the external
+operator call).
 
 It's deliberately small enough to read end-to-end, and every non-obvious
 decision is documented in the design notes.
@@ -68,20 +70,22 @@ the internal saga path.
 
 ---
 
-## Tech → fintech-JD mapping
+## Tech stack → where it lives
 
-| The JD asks for | Where it lives here |
+| Technology / concern | Where it lives here |
 |---|---|
-| C# / ASP.NET Core Web API | both services (Minimal APIs, .NET 10) |
-| SQL Server | `Wallet.Api` — balances, ledger, idempotency store (EF Core) |
-| RabbitMQ | inter-service commands + events via MassTransit |
+| C# / ASP.NET Core Web API | all services (Minimal APIs, .NET 10) |
+| SQL Server | `Wallet.Api` — balances, ledger, idempotency + outbox store (EF Core) |
+| RabbitMQ (MassTransit) | inter-service commands + events |
 | Redis | rate limiting + cache-aside price lookup (`TopUp.Api`) |
 | MongoDB | append-only audit log (`Wallet.Api/Audit`) |
-| Docker | `docker-compose.yml` — all four backing services |
-| Microservices | two bounded-context services + shared contracts |
+| Docker | `docker-compose.yml` — all backing services + the apps |
+| Microservices | bounded-context services + shared contracts |
 | Messaging / REST | REST at the edges, event-driven between services |
-| TDD / SOLID / mocking | xUnit + Moq; `IAuditLog` / `IOperatorGateway` seams |
-| Design patterns | Saga, Compensation, Decorator, Cache-aside, Repository (EF) |
+| Auth | JWT access + refresh (`Auth.Api`), Bearer on every call |
+| Observability | OpenTelemetry (traces/metrics/logs) → OTel Collector → Jaeger / Prometheus / Loki / Grafana |
+| Testing | xUnit + Moq; `IAuditLog` / `IOperatorGateway` seams |
+| Design patterns | Saga, Compensation, Outbox, Decorator, Cache-aside, Repository (EF) |
 
 ---
 

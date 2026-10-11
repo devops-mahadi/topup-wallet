@@ -1,0 +1,160 @@
+### TopUp Wallet — "Try It" full flow, top to bottom.
+### Run each request in order with the REST Client extension (VS Code) or Rider.
+### The stack must be up:  docker compose up -d
+### Click "Send Request" above each request. Later requests reuse the token +
+### ids from earlier responses automatically (request variables), so run in order.
+
+@auth   = http://localhost:5003
+@wallet = http://localhost:5001
+@topup  = http://localhost:5002
+@json   = application/json
+
+### ── 0. Health (open, no token) ──
+GET {{wallet}}/health
+
+### ══════════════════════════════════════════════════════════════════
+### 1. LOG IN  → returns accessToken + refreshToken (any non-empty creds)
+# @name login
+POST {{auth}}/auth/login
+Content-Type: {{json}}
+
+{ "username": "demo", "password": "any" }
+
+###
+@token = {{login.response.body.$.accessToken}}
+
+### 2a. Create an account WITHOUT a token → 401 Unauthorized (auth works)
+POST {{wallet}}/accounts
+Content-Type: {{json}}
+
+{ "ownerName": "No Auth", "currency": "USD", "opening": 0 }
+
+### ══════════════════════════════════════════════════════════════════
+### 2b. Create an account WITH the token → 201, balance 0, returns id
+# @name createAccount
+POST {{wallet}}/accounts
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "ownerName": "Demo", "currency": "USD", "opening": 0 }
+
+###
+@accountId = {{createAccount.response.body.$.id}}
+
+### ══════════════════════════════════════════════════════════════════
+### 3. FUND THE WALLET (money IN via the payment gateway)
+### 3a. Create a $100 deposit (card token "tok_ok"). Returns a PENDING deposit.
+###     Balance is NOT credited yet — money lands only on the signed webhook.
+# @name createDeposit
+POST {{wallet}}/accounts/{{accountId}}/deposits
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "paymentToken": "tok_ok", "amount": 100 }
+
+###
+@depositId = {{createDeposit.response.body.$.depositId}}
+
+### 3b. Check balance now → still 0 (webhook hasn't arrived)
+GET {{wallet}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
+
+### 3c. Get a correctly-SIGNED webhook payload for this deposit (demo helper)
+# @name webhookPayload
+POST {{wallet}}/accounts/{{accountId}}/deposits/{{depositId}}/webhook-payload
+Authorization: Bearer {{token}}
+
+###
+@webhookBody = {{webhookPayload.response.body.$.body}}
+@webhookSig  = {{webhookPayload.response.body.$.signature}}
+
+### 3d. POST the webhook with a VALID signature → wallet credited. Balance → 100.
+POST {{wallet}}/webhooks/payment
+X-Signature: {{webhookSig}}
+Content-Type: {{json}}
+
+{{webhookBody}}
+
+### 3e. Balance now → 100
+GET {{wallet}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
+
+### 3f. REPLAY the same webhook (PSPs retry) → idempotent, balance STILL 100
+POST {{wallet}}/webhooks/payment
+X-Signature: {{webhookSig}}
+Content-Type: {{json}}
+
+{{webhookBody}}
+
+### 3g. FORGED webhook (bad signature) → 401, no credit
+POST {{wallet}}/webhooks/payment
+X-Signature: deadbeef-not-a-real-signature
+Content-Type: {{json}}
+
+{{webhookBody}}
+
+### ══════════════════════════════════════════════════════════════════
+### 4. TOP UP A PHONE (money OUT via the saga)
+### 4a. Happy path: $5 → wallet debited, operator charged OK. Balance → 95.
+###     Returns 202 Accepted + topUpId + fee (the saga runs async).
+POST {{topup}}/topups
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+8801711000000", "amount": 5, "idempotencyKey": "demo-ok-1" }
+
+### 4b. Decline path: $5.13 (cents .13 → operator declines) → debited then
+###     AUTO-REFUNDED by the saga's compensation. Balance back to 95.
+POST {{topup}}/topups
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "accountId": "{{accountId}}", "phoneNumber": "+8801711000000", "amount": 5.13, "idempotencyKey": "demo-fail-1" }
+
+### (wait ~2-3 seconds for the async saga to settle, then inspect below)
+
+### ══════════════════════════════════════════════════════════════════
+### 5. INSPECT
+### 5a. Balance → 95  (100 funded, −5 happy top-up, 5.13 debited+refunded nets 0)
+GET {{wallet}}/accounts/{{accountId}}
+Authorization: Bearer {{token}}
+
+### 5b. SQL ledger — immutable, append-only. See debit 5, then debit 5.13, then
+###     a refund credit 5.13 (the compensation — an opposite entry, not a rollback).
+GET {{wallet}}/accounts/{{accountId}}/transactions
+Authorization: Bearer {{token}}
+
+### 5c. Mongo audit trail (append-only event log), paginated
+GET {{wallet}}/accounts/{{accountId}}/audit?page=1&pageSize=50
+Authorization: Bearer {{token}}
+
+### ══════════════════════════════════════════════════════════════════
+### 6. OWNERSHIP / IDOR — a DIFFERENT user cannot touch this account
+# @name loginOther
+POST {{auth}}/auth/login
+Content-Type: {{json}}
+
+{ "username": "mallory", "password": "any" }
+
+###
+@otherToken = {{loginOther.response.body.$.accessToken}}
+
+### 6a. Another user reads Demo's account → 403 Forbidden (ownership check)
+GET {{wallet}}/accounts/{{accountId}}
+Authorization: Bearer {{otherToken}}
+
+### 6b. Another user debits Demo's account → 403 Forbidden
+POST {{wallet}}/accounts/{{accountId}}/debit
+Authorization: Bearer {{otherToken}}
+Content-Type: {{json}}
+
+{ "amount": 10, "idempotencyKey": "mallory-steal" }
+
+### ══════════════════════════════════════════════════════════════════
+### 7. REFRESH — exchange the refresh token for a new access + refresh pair
+@refreshToken = {{login.response.body.$.refreshToken}}
+
+POST {{auth}}/auth/refresh
+Content-Type: {{json}}
+
+{ "refreshToken": "{{refreshToken}}" }
